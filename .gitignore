@@ -345,3 +345,6 @@ app/src/main/resources/*.jks
 app/src/test/resources/*.jks
 app/src/main/resources/*.p12
 app/src/test/resources/*.p12
+
+# Log files of the evaluation are measurement data and therefore tracked
+!evaluation/**/*.log

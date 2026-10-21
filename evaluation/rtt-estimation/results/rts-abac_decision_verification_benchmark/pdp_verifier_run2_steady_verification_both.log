@@ -1,0 +1,8 @@
+PDP - Policy Decision Point
+[Request] Key exchange request sent to 192.168.0.61.
+[Request] Key exchange request sent to 192.168.0.60.
+[PDP] Verify grant: /192.168.0.61. (took 43290 µs)
+[PDP] Verify grant: /192.168.0.60. (took 53413 µs)
+[PDP] Verify grant: /192.168.0.60. (took 2515 µs)
+[PDP] Verify grant: /192.168.0.61. (took 2987 µs)
+[PDP] Verify deny: /192.168.0.60. (took 795 µs)

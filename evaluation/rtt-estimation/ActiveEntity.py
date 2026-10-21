@@ -55,11 +55,20 @@ if __name__ == "__main__":
     port = int(sys.argv[2])
     readings = int(sys.argv[3])
     label = str(sys.argv[4])
+    # Optional: seconds to wait after the initialization packets and before the measurement starts. A value that
+    # exceeds the period of validity lets the access decisions of both directions expire, so that the first
+    # measured exchange captures the access request and the session initialization of both directions.
+    postInitializationTimeout = float(sys.argv[5]) if len(sys.argv) > 5 else 0
+    # Optional: seconds to wait for a response before a message is counted as lost. The default must stay below the
+    # period of validity of the access decisions, as a timeout that reaches or exceeds it lets the decisions expire
+    # while a lost message is awaited, so that every subsequent message faces an expired decision again.
+    receiveTimeout = float(sys.argv[6]) if len(sys.argv) > 6 else 5.0
     entity = ActiveEntity(destination, port)
 
     printTimed(f"Starting to estimate RTT.")
     startTime = time.time_ns()
-    roundTripTimes = entity.estimateRoundTripTime(readings)
+    roundTripTimes = entity.estimateRoundTripTime(readings, receiveTimeout=receiveTimeout,
+                                                  postInitializationTimeout=postInitializationTimeout)
     endTime = time.time_ns()
 
     if roundTripTimes is None:
