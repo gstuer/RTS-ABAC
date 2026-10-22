@@ -28,6 +28,8 @@ import java.util.List;
 import java.util.Optional;
 
 public class App {
+    private static final String VERIFICATION_AUTHORITY_NONE = "none";
+
     public static void main(String[] args) {
         System.out.println("IP/PEP - Intrusion Prevention & Policy Enforcement Point");
 
@@ -101,6 +103,24 @@ public class App {
             return;
         }
 
+        // Parse the addresses of the PDPs used for the optional server-aided access decision verification
+        InetAddress incomingVerificationAuthority = null;
+        InetAddress outgoingVerificationAuthority = null;
+        if (commandLine.hasOption("decision-verification")) {
+            String[] verificationAuthorityHostnames = commandLine.getOptionValues("decision-verification");
+            if (verificationAuthorityHostnames.length != 2) {
+                System.err.println("Parsing decision verification authorities failed: Two values are required.");
+                return;
+            }
+            try {
+                incomingVerificationAuthority = resolveVerificationAuthority(verificationAuthorityHostnames[0]);
+                outgoingVerificationAuthority = resolveVerificationAuthority(verificationAuthorityHostnames[1]);
+            } catch (UnknownHostException exception) {
+                System.err.println("Resolving decision verification authority hostname failed: " + exception.getMessage());
+                return;
+            }
+        }
+
         // Parse authenticator from command line arguments
         Optional<Authenticator<?, ?>> optionalAuthenticator = AuthenticatorFactory.createByIdentifier(commandLine.getOptionValue("crypto"));
         if (optionalAuthenticator.isEmpty()) {
@@ -119,12 +139,35 @@ public class App {
         } else {
             // Start forwarding traffic between the specified interfaces using a secured network bridge instance
             System.out.printf("Supervisory Mode: %s <-> %s\n", insecureNetworkInterface.getName(), secureNetworkInterface.getName());
+            System.out.printf("Decision Verification: incoming %s, outgoing %s\n",
+                    describeVerificationAuthority(incomingVerificationAuthority),
+                    describeVerificationAuthority(outgoingVerificationAuthority));
             NetworkBridge networkBridge = new NetworkBridge(insecureNetworkInterface, secureNetworkInterface,
-                    authorizationAuthority, authenticationAuthority, authenticator, new ArpPredicate(),
+                    authorizationAuthority, incomingVerificationAuthority, outgoingVerificationAuthority,
+                    authenticationAuthority, authenticator, new ArpPredicate(),
                     new IcmpV4Predicate(), new LldpPredicate(), new PtpPredicate(), new PrpPredicate(),
                     new StpPredicate(), new SshOverTcpPredicate());
             networkBridge.open();
         }
+    }
+
+    /**
+     * Resolves the address of a verifying PDP, where {@value #VERIFICATION_AUTHORITY_NONE} disables the server-aided
+     * access decision verification for the direction in question.
+     *
+     * @param hostname the hostname or address of the verifying PDP, or {@value #VERIFICATION_AUTHORITY_NONE}
+     * @return the resolved address, or {@code null} if the verification is disabled.
+     * @throws UnknownHostException if the given hostname cannot be resolved
+     */
+    private static InetAddress resolveVerificationAuthority(String hostname) throws UnknownHostException {
+        if (VERIFICATION_AUTHORITY_NONE.equalsIgnoreCase(hostname)) {
+            return null;
+        }
+        return InetAddress.getByName(hostname);
+    }
+
+    private static String describeVerificationAuthority(InetAddress authority) {
+        return authority == null ? VERIFICATION_AUTHORITY_NONE : authority.getHostAddress();
     }
 
     private static void displayHelp() {
@@ -184,6 +227,15 @@ public class App {
                 .numberOfArgs(1)
                 .argName("algorithm")
                 .required(enableRequiredOptions)
+                .build());
+        options.addOption(Option.builder()
+                .longOpt("decision-verification")
+                .desc("set the hostnames or addresses of the PDPs that verify the session initializations for"
+                        + " incoming and for outgoing traffic; pass " + VERIFICATION_AUTHORITY_NONE + " to disable"
+                        + " the verification for a direction")
+                .numberOfArgs(2)
+                // The argument name renders both expected values in the help dialog.
+                .argName("incoming> <outgoing")
                 .build());
         options.addOption(Option.builder("f")
                 .longOpt("forward")

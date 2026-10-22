@@ -10,6 +10,8 @@ import com.gstuer.casc.common.cryptography.Authenticator;
 import com.gstuer.casc.common.message.AccessControlMessage;
 import com.gstuer.casc.common.message.AccessDecisionMessage;
 import com.gstuer.casc.common.message.AccessRequestMessage;
+import com.gstuer.casc.common.message.AccessVerificationMessage;
+import com.gstuer.casc.common.message.AccessVerificationRequestMessage;
 import com.gstuer.casc.common.message.AttributeExchangeMessage;
 import com.gstuer.casc.common.message.KeyExchangeMessage;
 import com.gstuer.casc.common.message.KeyExchangeRequestMessage;
@@ -54,7 +56,7 @@ public class AuthorizationController {
                 MacAddress.getByName("2c:cf:67:a8:51:7e"), EtherType.IPV4);
         EthernetPattern gooseToLingonPattern = new EthernetPattern(MacAddress.getByName("2c:cf:67:a8:51:7e"),
                 MacAddress.getByName("2c:cf:67:a8:51:24"), EtherType.IPV4);
-        PolicyPredicate predicate = new StaticResultPredicate(true, Duration.ofMinutes(10));
+        PolicyPredicate predicate = new StaticResultPredicate(true, Duration.ofSeconds(5));
         try {
             AccessPolicy lingonToGoosePolicy = new AccessPolicy(lingonToGoosePattern, AccessDecision.Action.GRANT,
                     InetAddress.getByName("192.168.0.61"), predicate);
@@ -206,6 +208,26 @@ public class AuthorizationController {
                 System.out.println("[PDP] Signing failed.");
                 return;
             }
+        } else if (accessControlMessage instanceof AccessVerificationRequestMessage message) {
+            // Verify signature
+            if (!this.authenticationClient.verifyMessage(message)) {
+                return;
+            }
+
+            // Get matching decision for the flow pattern whose session initialization is verified
+            AccessRequestPattern pattern = message.getPayload();
+            AccessDecision decision = this.evaluationManager.getDecision(pattern);
+
+            // Send decision to the requester only, i.e. without initializing sessions at the next hop PEPs
+            AccessVerificationMessage verificationMessage = new AccessVerificationMessage(message.getSource(), null, decision);
+            Optional<AccessControlMessage<?>> optionalSignedMessage = authenticationClient.signMessage(verificationMessage);
+            if (optionalSignedMessage.isEmpty()) {
+                System.out.println("[PDP] Signing failed.");
+                return;
+            }
+            this.egressQueue.offer(optionalSignedMessage.get());
+            System.out.printf("[PDP] Verify %s: %s. (took %d µs)\n", decision.isGranting() ? "grant" : "deny",
+                    message.getSource(), TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - arrivalTime));
         } else {
             System.out.println("[PDP] Unknown message type.");
         }

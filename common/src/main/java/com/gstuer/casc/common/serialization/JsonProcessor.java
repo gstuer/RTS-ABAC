@@ -9,6 +9,8 @@ import com.gstuer.casc.common.attribute.StringAttribute;
 import com.gstuer.casc.common.message.AccessControlMessage;
 import com.gstuer.casc.common.message.AccessDecisionMessage;
 import com.gstuer.casc.common.message.AccessRequestMessage;
+import com.gstuer.casc.common.message.AccessVerificationMessage;
+import com.gstuer.casc.common.message.AccessVerificationRequestMessage;
 import com.gstuer.casc.common.message.AttributeExchangeMessage;
 import com.gstuer.casc.common.message.AttributeExchangeRequestMessage;
 import com.gstuer.casc.common.message.KeyExchangeMessage;
@@ -55,6 +57,8 @@ public class JsonProcessor {
                 .registerSubtype(KeyExchangeRequestMessage.class)
                 .registerSubtype(AccessRequestMessage.class)
                 .registerSubtype(AccessDecisionMessage.class)
+                .registerSubtype(AccessVerificationRequestMessage.class)
+                .registerSubtype(AccessVerificationMessage.class)
                 .registerSubtype(AttributeExchangeMessage.class)
                 .registerSubtype(AttributeExchangeRequestMessage.class)
                 .recognizeSubtypes();

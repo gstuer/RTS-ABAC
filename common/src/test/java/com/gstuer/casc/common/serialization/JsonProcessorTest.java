@@ -10,6 +10,8 @@ import com.gstuer.casc.common.cryptography.EncodedKey;
 import com.gstuer.casc.common.message.AccessControlMessage;
 import com.gstuer.casc.common.message.AccessDecisionMessage;
 import com.gstuer.casc.common.message.AccessRequestMessage;
+import com.gstuer.casc.common.message.AccessVerificationMessage;
+import com.gstuer.casc.common.message.AccessVerificationRequestMessage;
 import com.gstuer.casc.common.message.AttributeExchangeMessage;
 import com.gstuer.casc.common.message.AttributeExchangeRequestMessage;
 import com.gstuer.casc.common.message.KeyExchangeMessage;
@@ -277,6 +279,51 @@ public class JsonProcessorTest {
 
         // Assertion
         assertNotNull(deserialMessage);
+        assertEquals(message, deserialMessage);
+    }
+
+    @Test
+    public void testSerializationAndDeserializationOfAccessVerificationRequestMessage() throws SerializationException, UnknownHostException {
+        // Test data
+        JsonProcessor jsonProcessor = new JsonProcessor();
+        InetAddress source = InetAddress.getByName("127.0.0.1");
+        InetAddress destination = InetAddress.getByName("localhost");
+        DigitalSignature signature = new DigitalSignature(new byte[32], "test");
+        AccessRequestPattern pattern = new EthernetPattern(MacAddress.getByName("00:00:00:00:00:00"),
+                MacAddress.getByName("ff:ff:ff:ff:ff:ff"), EtherType.IPV4);
+        AccessVerificationRequestMessage message = new AccessVerificationRequestMessage(source, destination, signature, pattern);
+
+        // Execution
+        byte[] serialMessage = jsonProcessor.serialize(message);
+        AccessControlMessage<?> deserialMessage = jsonProcessor.deserialize(serialMessage, AccessControlMessage.class);
+
+        // Assertions
+        assertNotNull(deserialMessage);
+        assertInstanceOf(AccessVerificationRequestMessage.class, deserialMessage);
+        assertEquals(message, deserialMessage);
+    }
+
+    @Test
+    public void testSerializationAndDeserializationOfAccessVerificationMessage() throws SerializationException, UnknownHostException {
+        // Test data
+        JsonProcessor jsonProcessor = new JsonProcessor();
+        InetAddress source = InetAddress.getByName("127.0.0.1");
+        InetAddress destination = InetAddress.getByName("localhost");
+        InetAddress nextHop = InetAddress.getByName("127.0.0.4");
+        DigitalSignature signature = new DigitalSignature(new byte[32], "test");
+        AccessRequestPattern pattern = new EthernetPattern(MacAddress.getByName("00:00:00:00:00:00"),
+                MacAddress.getByName("ff:ff:ff:ff:ff:ff"), EtherType.IPV4);
+        AccessDecision decision = new AccessDecision(pattern, AccessDecision.Action.GRANT, nextHop,
+                Instant.now().plus(Duration.ofSeconds(60)));
+        AccessVerificationMessage message = new AccessVerificationMessage(source, destination, signature, decision);
+
+        // Execution
+        byte[] serialMessage = jsonProcessor.serialize(message);
+        AccessControlMessage<?> deserialMessage = jsonProcessor.deserialize(serialMessage, AccessControlMessage.class);
+
+        // Assertions
+        assertNotNull(deserialMessage);
+        assertInstanceOf(AccessVerificationMessage.class, deserialMessage);
         assertEquals(message, deserialMessage);
     }
 }

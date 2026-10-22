@@ -4,6 +4,7 @@ import com.gstuer.casc.common.AuthenticationClient;
 import com.gstuer.casc.common.cryptography.Authenticator;
 import com.gstuer.casc.common.message.AccessControlMessage;
 import com.gstuer.casc.common.message.AccessDecisionMessage;
+import com.gstuer.casc.common.message.AccessVerificationMessage;
 import com.gstuer.casc.common.message.KeyExchangeMessage;
 import com.gstuer.casc.common.message.KeyExchangeRequestMessage;
 import com.gstuer.casc.common.message.PayloadExchangeMessage;
@@ -23,11 +24,20 @@ public class AccessController {
     public AccessController(BlockingQueue<AccessControlMessage<?>> messageEgress, BlockingQueue<Packet> packetEgress,
                             InetAddress authorizationAuthority, InetAddress authorizationScope,
                             InetAddress authenticationAuthority, Authenticator<?, ?> authenticator) {
+        this(messageEgress, packetEgress, authorizationAuthority, authorizationScope, null, null,
+                authenticationAuthority, authenticator);
+    }
+
+    public AccessController(BlockingQueue<AccessControlMessage<?>> messageEgress, BlockingQueue<Packet> packetEgress,
+                            InetAddress authorizationAuthority, InetAddress authorizationScope,
+                            InetAddress incomingVerificationAuthority, InetAddress outgoingVerificationAuthority,
+                            InetAddress authenticationAuthority, Authenticator<?, ?> authenticator) {
         this.messageEgress = Objects.requireNonNull(messageEgress);
         this.packetEgress = Objects.requireNonNull(packetEgress);
         this.authenticationClient = new AuthenticationClient(authenticationAuthority, authenticator, this.messageEgress);
         this.authorizationManager = new AuthorizationManager(authorizationAuthority, authorizationScope,
-                this.authenticationClient, this.messageEgress);
+                incomingVerificationAuthority, outgoingVerificationAuthority, this.authenticationClient,
+                this.messageEgress);
     }
 
     public void handleOutgoingRequest(Packet packet) {
@@ -69,6 +79,9 @@ public class AccessController {
             // Forward message to authentication manager for processing
             this.authenticationClient.processMessage(message);
         } else if (accessControlMessage instanceof AccessDecisionMessage message) {
+            // Forward message to authorization manager for processing
+            this.authorizationManager.processMessage(message);
+        } else if (accessControlMessage instanceof AccessVerificationMessage message) {
             // Forward message to authorization manager for processing
             this.authorizationManager.processMessage(message);
         } else {

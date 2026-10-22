@@ -29,6 +29,8 @@ public class NetworkBridge {
     private final PcapNetworkInterface networkInterfaceInsecure;
     private final PcapNetworkInterface networkInterfaceSecure;
     private final InetAddress authorizationAuthority;
+    private final InetAddress incomingVerificationAuthority;
+    private final InetAddress outgoingVerificationAuthority;
     private final InetAddress authenticationAuthority;
     private final Authenticator<?, ?> authenticator;
     private final BlockingQueue<Packet> egressQueueInsecure;
@@ -48,10 +50,34 @@ public class NetworkBridge {
     public NetworkBridge(PcapNetworkInterface networkInterfaceInsecure, PcapNetworkInterface networkInterfaceSecure,
                          InetAddress authorizationAuthority, InetAddress authenticationAuthority,
                          Authenticator<?, ?> authenticator, PacketPredicate... bypassPredicates) {
+        this(networkInterfaceInsecure, networkInterfaceSecure, authorizationAuthority, null, null,
+                authenticationAuthority, authenticator, bypassPredicates);
+    }
+
+    /**
+     * Constructs a new {@link NetworkBridge network bridge}.
+     *
+     * @param networkInterfaceInsecure      the interface facing the network shared with the other PEPs
+     * @param networkInterfaceSecure        the interface facing the protected SAS device
+     * @param authorizationAuthority        the address of the PDP that issues the session initializations
+     * @param incomingVerificationAuthority the address of the PDP against which session initializations for incoming
+     *                                      traffic are verified, or {@code null} to accept them unverified
+     * @param outgoingVerificationAuthority the address of the PDP against which session initializations for outgoing
+     *                                      traffic are verified, or {@code null} to accept them unverified
+     * @param authenticationAuthority       the address of the authentication authority
+     * @param authenticator                 the authenticator used to sign and verify access control messages
+     * @param bypassPredicates              predicates selecting the traffic forwarded without access control
+     */
+    public NetworkBridge(PcapNetworkInterface networkInterfaceInsecure, PcapNetworkInterface networkInterfaceSecure,
+                         InetAddress authorizationAuthority, InetAddress incomingVerificationAuthority,
+                         InetAddress outgoingVerificationAuthority, InetAddress authenticationAuthority,
+                         Authenticator<?, ?> authenticator, PacketPredicate... bypassPredicates) {
         this.networkInterfaceInsecure = Objects.requireNonNull(networkInterfaceInsecure);
         this.networkInterfaceSecure = Objects.requireNonNull(networkInterfaceSecure);
 
         this.authorizationAuthority = Objects.requireNonNull(authorizationAuthority);
+        this.incomingVerificationAuthority = incomingVerificationAuthority;
+        this.outgoingVerificationAuthority = outgoingVerificationAuthority;
         this.authenticationAuthority = Objects.requireNonNull(authenticationAuthority);
         this.authenticator = Objects.requireNonNull(authenticator);
 
@@ -87,7 +113,8 @@ public class NetworkBridge {
         }
         InetAddress authorizationScope = insecureAddresses.get(0).getAddress();
         this.accessController = new AccessController(this.egressQueueMessage, this.egressQueueSecure,
-                this.authorizationAuthority, authorizationScope, this.authenticationAuthority, authenticator);
+                this.authorizationAuthority, authorizationScope, this.incomingVerificationAuthority,
+                this.outgoingVerificationAuthority, this.authenticationAuthority, authenticator);
 
         // Specify ingress packet consumers
         Consumer<Packet> egressEnqueueInsecure = this.egressQueueInsecure::offer;
