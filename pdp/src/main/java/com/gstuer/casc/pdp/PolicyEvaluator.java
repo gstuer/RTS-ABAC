@@ -12,8 +12,8 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 public class PolicyEvaluator implements Runnable {
-    private final static long REFRESH_THRESHOLD = 125;
-    private final static long SLEEP_OFFSET = 100;
+    private final static long REFRESH_THRESHOLD = 350;
+    private final static long SLEEP_OFFSET = 300;
 
     private final AccessPolicy policy;
     private final AttributeSubscriber attributeSubscriber;

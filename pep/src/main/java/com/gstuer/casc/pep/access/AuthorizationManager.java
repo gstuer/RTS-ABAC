@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 
 public class AuthorizationManager {
-    private final TemporalAmount ACCESS_DECISION_VALIDITY_OFFSET = Duration.ofMillis(50);
+    private final TemporalAmount ACCESS_DECISION_VALIDITY_OFFSET = Duration.ofMillis(100);
 
     private final InetAddress authorizationAuthority;
     private final InetAddress authorizationScope;
