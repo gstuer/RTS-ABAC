@@ -34,7 +34,7 @@ public class AuthorizationManager {
     private final AuthenticationClient authenticationClient;
     private final BlockingQueue<AccessControlMessage<?>> messageEgress;
     private final ConcurrentMap<AccessRequestPattern, RequestableAccessDecision> requestedDecisions;
-    private final ConcurrentMap<AccessRequestPattern, RequestableAccessVerification> requestedVerifications;
+    private final ConcurrentMap<PendingVerification, RequestableAccessVerification> requestedVerifications;
     private final SortedSet<AccessDecision> outgoingDecisions;
     private final SortedSet<AccessDecision> incomingDecisions;
 
@@ -172,7 +172,7 @@ public class AuthorizationManager {
                 || !this.isVerificationAuthority(message.getSource())) {
             return;
         }
-        this.resolveVerifications(message.getPayload());
+        this.resolveVerifications(message.getSource(), message.getPayload());
     }
 
     /**
@@ -221,10 +221,10 @@ public class AuthorizationManager {
         }
 
         // Request the access decision that the verifying PDP holds for the flow pattern of the session initialization
-        AccessRequestPattern pattern = decision.getPattern();
-        RequestableAccessVerification requestableVerification = this.requestedVerifications.computeIfAbsent(pattern,
-                key -> new RequestableAccessVerification(this.messageEgress, this.authenticationClient.getSigner(),
-                        authority, key));
+        PendingVerification pendingVerification = new PendingVerification(authority, decision.getPattern());
+        RequestableAccessVerification requestableVerification = this.requestedVerifications
+                .computeIfAbsent(pendingVerification, key -> new RequestableAccessVerification(this.messageEgress,
+                        this.authenticationClient.getSigner(), key.authority(), key.pattern()));
 
         // Wait until the verifying PDP responded
         AccessDecision verification;
@@ -235,7 +235,10 @@ public class AuthorizationManager {
                     authority.getHostAddress());
             return false;
         } finally {
-            this.requestedVerifications.remove(pattern);
+            // Discard the response, so that a subsequent session initialization for the same flow pattern is verified
+            // again instead of reusing this response. A verification requested concurrently by another thread is left
+            // in place, as its requester awaits a response that is yet to arrive.
+            this.requestedVerifications.remove(pendingVerification, requestableVerification);
         }
 
         boolean verified = authorizes(verification, decision);
@@ -261,10 +264,24 @@ public class AuthorizationManager {
                 });
     }
 
-    private void resolveVerifications(AccessDecision decision) {
+    private void resolveVerifications(InetAddress authority, AccessDecision decision) {
         AccessRequestPattern pattern = decision.getPattern();
         requestedVerifications.entrySet().stream().parallel()
-                .filter(entry -> entry.getValue().isUnavailable() && entry.getKey().contains(pattern))
+                .filter(entry -> entry.getValue().isUnavailable()
+                        && entry.getKey().authority().equals(authority)
+                        && entry.getKey().pattern().contains(pattern))
                 .forEach(entry -> entry.getValue().set(decision));
+    }
+
+    /**
+     * Identifies a pending access decision verification by the verifying PDP that it was requested from and by the
+     * flow pattern that it concerns. The verifying PDP is part of the identity, so that the response of one verifying
+     * PDP cannot satisfy a verification requested from another one, e.g. if the verification of incoming and of
+     * outgoing session initializations is delegated to two different PDPs.
+     *
+     * @param authority the address of the verifying PDP the verification was requested from
+     * @param pattern   the flow pattern of the session initialization to be verified
+     */
+    private record PendingVerification(InetAddress authority, AccessRequestPattern pattern) {
     }
 }

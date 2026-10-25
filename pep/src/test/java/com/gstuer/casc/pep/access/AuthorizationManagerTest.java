@@ -47,6 +47,7 @@ public class AuthorizationManagerTest {
     private InetAddress scope;
     private InetAddress authorizationAuthority;
     private InetAddress verificationAuthority;
+    private InetAddress secondVerificationAuthority;
     private InetAddress nextHop;
 
     @BeforeEach
@@ -55,6 +56,7 @@ public class AuthorizationManagerTest {
         this.scope = InetAddress.getByName("127.0.0.1");
         this.authorizationAuthority = InetAddress.getByName("127.0.0.2");
         this.verificationAuthority = InetAddress.getByName("127.0.0.3");
+        this.secondVerificationAuthority = InetAddress.getByName("127.0.0.5");
         this.nextHop = InetAddress.getByName("127.0.0.4");
 
         // The no-operation authenticator accepts every signature, so no key exchange over the network is required.
@@ -62,6 +64,7 @@ public class AuthorizationManagerTest {
                 new NoOperationAuthenticator(), this.egress);
         this.seedVerifier(this.authorizationAuthority);
         this.seedVerifier(this.verificationAuthority);
+        this.seedVerifier(this.secondVerificationAuthority);
         this.egress.clear();
     }
 
@@ -190,6 +193,54 @@ public class AuthorizationManagerTest {
         assertTrue(manager.authorizeIncoming(this.payloadExchange()).isPresent());
     }
 
+    @Test
+    public void testSessionInitializationsOfBothDirectionsAreVerifiedByTheirOwnAuthority() throws Exception {
+        AuthorizationManager manager = this.createManager(this.verificationAuthority,
+                this.secondVerificationAuthority);
+
+        // A session initialization whose next hop is this PEP is incoming, any other one is outgoing
+        Thread incoming = startThread(() -> manager.processMessage(this.sessionInitialization(this.scope)));
+        AccessControlMessage<?> incomingRequest = this.pollEgress();
+        Thread outgoing = startThread(() -> manager.processMessage(this.sessionInitialization(this.nextHop)));
+        AccessControlMessage<?> outgoingRequest = this.pollEgress();
+
+        // Each direction must be verified by the PDP configured for it
+        assertInstanceOf(AccessVerificationRequestMessage.class, incomingRequest);
+        assertInstanceOf(AccessVerificationRequestMessage.class, outgoingRequest);
+        assertEquals(this.verificationAuthority, incomingRequest.getDestination());
+        assertEquals(this.secondVerificationAuthority, outgoingRequest.getDestination());
+
+        manager.processMessage(this.verification(grant(pattern(), this.scope, 60)));
+        manager.processMessage(this.signedVerification(grant(pattern(), this.nextHop, 60),
+                this.secondVerificationAuthority));
+        join(incoming);
+        join(outgoing);
+        assertTrue(manager.authorizeIncoming(this.payloadExchange()).isPresent());
+    }
+
+    @Test
+    public void testVerificationDoesNotSatisfyAVerificationRequestedFromAnotherAuthority() throws Exception {
+        AuthorizationManager manager = this.createManager(this.verificationAuthority,
+                this.secondVerificationAuthority);
+
+        Thread incoming = startThread(() -> manager.processMessage(this.sessionInitialization(this.scope)));
+        assertInstanceOf(AccessVerificationRequestMessage.class, this.pollEgress());
+        Thread outgoing = startThread(() -> manager.processMessage(this.sessionInitialization(this.nextHop)));
+        assertInstanceOf(AccessVerificationRequestMessage.class, this.pollEgress());
+
+        // The response of the PDP verifying the incoming traffic must leave the verification of the outgoing session
+        // initialization pending, which the PEP signals by repeating its request to the responsible PDP.
+        manager.processMessage(this.verification(grant(pattern(), this.scope, 60)));
+        join(incoming);
+        AccessControlMessage<?> repeatedRequest = this.pollEgress();
+        assertInstanceOf(AccessVerificationRequestMessage.class, repeatedRequest);
+        assertEquals(this.secondVerificationAuthority, repeatedRequest.getDestination());
+
+        manager.processMessage(this.signedVerification(grant(pattern(), this.nextHop, 60),
+                this.secondVerificationAuthority));
+        join(outgoing);
+    }
+
     //
     // Outgoing session initializations and the data frame that triggers them
     //
@@ -267,6 +318,14 @@ public class AuthorizationManagerTest {
 
     private PayloadExchangeMessage payloadExchange() {
         return new PayloadExchangeMessage(this.authorizationAuthority, this.scope, null, packet());
+    }
+
+    private AccessDecisionMessage sessionInitialization(InetAddress nextHop) {
+        try {
+            return this.sessionInitialization(grant(pattern(), nextHop, 60));
+        } catch (Exception exception) {
+            throw new IllegalStateException(exception);
+        }
     }
 
     private AccessDecisionMessage sessionInitialization(AccessDecision decision) throws Exception {
