@@ -41,6 +41,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -183,9 +184,46 @@ public class JsonProcessorTest {
         // Assertion
         assertNotNull(deserialized);
         assertEquals(pattern, deserialized.getPattern());
-        assertEquals(address, deserialized.getNextHop());
+        assertEquals(Set.of(address), deserialized.getNextHops());
         assertEquals(action, deserialized.getAction());
         assertEquals(validUntilNow, deserialized.getValidUntil());
+    }
+
+    /**
+     * A session initialization transmits one or multiple access decisions, each of which may permit several
+     * recipients and may state that its policy is not applicable. The wire format has to preserve all of it, as a
+     * PEP resolves the transmitted decisions for the individual data frame.
+     */
+    @Test
+    public void testSerializationAndDeserializationOfSessionInitializationWithSeveralDecisions()
+            throws SerializationException, UnknownHostException {
+        // Test data
+        JsonProcessor jsonProcessor = new JsonProcessor();
+        AccessRequestPattern pattern = new UdpPattern(10000, 10001, null);
+        InetAddress firstNextHop = InetAddress.getByName("127.0.0.1");
+        InetAddress secondNextHop = InetAddress.getByName("127.0.0.2");
+        Instant validUntil = Instant.now();
+        AccessDecision grant = new AccessDecision(pattern, AccessDecision.Action.GRANT,
+                Set.of(firstNextHop, secondNextHop), validUntil);
+        AccessDecision nonApplicable = new AccessDecision(pattern, AccessDecision.Action.NOTAPPLICABLE, Set.of(),
+                validUntil);
+        DigitalSignature signature = new DigitalSignature(new byte[]{1, 2, 3, 4}, "test");
+        AccessDecisionMessage message = new AccessDecisionMessage(firstNextHop, signature,
+                List.of(grant, nonApplicable));
+
+        // Execution
+        byte[] serial = jsonProcessor.serialize(message);
+        AccessDecisionMessage deserialized = (AccessDecisionMessage) jsonProcessor.deserialize(serial,
+                AccessControlMessage.class);
+
+        // Assertion
+        assertNotNull(deserialized);
+        assertEquals(message, deserialized);
+        assertEquals(2, deserialized.getPayload().size());
+        assertEquals(Set.of(firstNextHop, secondNextHop), deserialized.getPayload().get(0).getNextHops());
+        assertFalse(deserialized.getPayload().get(1).isApplicable());
+        assertArrayEquals(message.getSigningData(), deserialized.getSigningData(),
+                "The signing data has to be reproducible from the deserialized message.");
     }
 
     @Test

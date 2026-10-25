@@ -7,6 +7,7 @@ import org.pcap4j.util.MacAddress;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -134,5 +135,35 @@ public class IpPatternTest {
         assertNotEquals(firstEthernetPattern, secondEthernetPattern);
         assertFalse(innerIpPattern.contains(outerIpPatternDifferentSubtree));
         assertFalse(outerIpPattern.contains(outerIpPatternDifferentSubtree));
+    }
+
+    /**
+     * The signing data of a flow pattern covers its enclosed patterns, so that two patterns which differ only in an
+     * enclosed pattern yield different signing data. Otherwise the signature of an access decision would not bind
+     * the decision to the protocol layers beneath the outermost one, and a decision signed for one link layer flow
+     * would be a validly signed decision for another one.
+     */
+    @Test
+    public void testSigningDataCoversTheEnclosedPattern() throws UnknownHostException {
+        // Test data
+        EthernetPattern firstEthernetPattern = new EthernetPattern(MacAddress.getByName("00:00:00:00:00:01"),
+                MacAddress.getByName("00:00:00:00:00:02"), EtherType.IPV4);
+        EthernetPattern secondEthernetPattern = new EthernetPattern(MacAddress.getByName("aa:aa:aa:aa:aa:aa"),
+                MacAddress.getByName("bb:bb:bb:bb:bb:bb"), EtherType.IPV4);
+        IpPattern firstPattern = new IpPattern(InetAddress.getByName("10.0.0.1"), InetAddress.getByName("10.0.0.2"),
+                IpNumber.TCP, firstEthernetPattern);
+        IpPattern secondPattern = new IpPattern(InetAddress.getByName("10.0.0.1"), InetAddress.getByName("10.0.0.2"),
+                IpNumber.TCP, secondEthernetPattern);
+        IpPattern isolatedPattern = new IpPattern(InetAddress.getByName("10.0.0.1"),
+                InetAddress.getByName("10.0.0.2"), IpNumber.TCP);
+
+        // Assertion
+        assertFalse(Arrays.equals(firstPattern.getSigningData(), secondPattern.getSigningData()),
+                "Patterns of two different link layer flows must not be signed identically.");
+        assertFalse(Arrays.equals(firstPattern.getSigningData(), isolatedPattern.getSigningData()),
+                "A pattern constraining the link layer must not be signed as one that does not constrain it.");
+        assertArrayEquals(firstEthernetPattern.getSigningData(),
+                Arrays.copyOfRange(firstPattern.getSigningData(), 9, firstPattern.getSigningData().length),
+                "The signing data of the enclosed pattern is appended to the one of the enclosing pattern.");
     }
 }

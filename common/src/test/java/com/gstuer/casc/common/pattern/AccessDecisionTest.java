@@ -9,6 +9,7 @@ import org.pcap4j.util.MacAddress;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.time.Instant;
+import java.util.Set;
 import java.util.SortedSet;
 import java.util.concurrent.ConcurrentSkipListSet;
 
@@ -24,9 +25,9 @@ public class AccessDecisionTest {
         AccessRequestPattern udpPattern = new UdpPattern(10000, 10001, ipPattern);
 
         Instant now = Instant.now();
-        AccessDecision udpDecision = new AccessDecision(udpPattern, AccessDecision.Action.GRANT, null, now);
-        AccessDecision ipDecision = new AccessDecision(ipPattern, AccessDecision.Action.GRANT, null, now);
-        AccessDecision ethernetDecision = new AccessDecision(ethernetPattern, AccessDecision.Action.GRANT, null, now);
+        AccessDecision udpDecision = new AccessDecision(udpPattern, AccessDecision.Action.GRANT, Set.of(), now);
+        AccessDecision ipDecision = new AccessDecision(ipPattern, AccessDecision.Action.GRANT, Set.of(), now);
+        AccessDecision ethernetDecision = new AccessDecision(ethernetPattern, AccessDecision.Action.GRANT, Set.of(), now);
 
         // Execution
         set.add(ipDecision);
@@ -48,9 +49,9 @@ public class AccessDecisionTest {
         AccessRequestPattern udpPattern = new UdpPattern(10000, 10001, ipPattern);
 
         Instant now = Instant.now();
-        AccessDecision udpDecision = new AccessDecision(udpPattern, AccessDecision.Action.DENY, null, now);
-        AccessDecision ipDecision = new AccessDecision(ipPattern, AccessDecision.Action.DENY, null, now);
-        AccessDecision ethernetDecision = new AccessDecision(ethernetPattern, AccessDecision.Action.DENY, null, now);
+        AccessDecision udpDecision = new AccessDecision(udpPattern, AccessDecision.Action.DENY, Set.of(), now);
+        AccessDecision ipDecision = new AccessDecision(ipPattern, AccessDecision.Action.DENY, Set.of(), now);
+        AccessDecision ethernetDecision = new AccessDecision(ethernetPattern, AccessDecision.Action.DENY, Set.of(), now);
 
         // Execution
         set.add(ipDecision);
@@ -73,8 +74,8 @@ public class AccessDecisionTest {
         AccessRequestPattern udpPattern = new UdpPattern(10000, 10001, ipPattern);
 
         Instant now = Instant.now();
-        AccessDecision denyDecision = new AccessDecision(udpPattern, AccessDecision.Action.DENY, null, now);
-        AccessDecision grantDecision = new AccessDecision(udpPattern, AccessDecision.Action.GRANT, null, now);
+        AccessDecision denyDecision = new AccessDecision(udpPattern, AccessDecision.Action.DENY, Set.of(), now);
+        AccessDecision grantDecision = new AccessDecision(udpPattern, AccessDecision.Action.GRANT, Set.of(), now);
 
         // Execution
         firstSet.add(denyDecision);
@@ -99,10 +100,10 @@ public class AccessDecisionTest {
         AccessRequestPattern udpPattern = new UdpPattern(10000, 10001, ipPattern);
 
         Instant now = Instant.now();
-        AccessDecision grantUdpDecision = new AccessDecision(udpPattern, AccessDecision.Action.GRANT, null, now);
-        AccessDecision grantIpDecision = new AccessDecision(ipPattern, AccessDecision.Action.GRANT, null, now);
-        AccessDecision denyIpIsolatedDecision = new AccessDecision(ipPatternIsolated, AccessDecision.Action.DENY, null, now);
-        AccessDecision grantEthernetDecision = new AccessDecision(ethernetPattern, AccessDecision.Action.GRANT, null, now);
+        AccessDecision grantUdpDecision = new AccessDecision(udpPattern, AccessDecision.Action.GRANT, Set.of(), now);
+        AccessDecision grantIpDecision = new AccessDecision(ipPattern, AccessDecision.Action.GRANT, Set.of(), now);
+        AccessDecision denyIpIsolatedDecision = new AccessDecision(ipPatternIsolated, AccessDecision.Action.DENY, Set.of(), now);
+        AccessDecision grantEthernetDecision = new AccessDecision(ethernetPattern, AccessDecision.Action.GRANT, Set.of(), now);
 
         // Execution
         set.add(grantEthernetDecision);

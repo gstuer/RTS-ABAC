@@ -26,11 +26,14 @@ import java.net.InetAddress;
 import java.security.InvalidKeyException;
 import java.security.SignatureException;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -49,6 +52,7 @@ public class AuthorizationManagerTest {
     private InetAddress verificationAuthority;
     private InetAddress secondVerificationAuthority;
     private InetAddress nextHop;
+    private InetAddress secondNextHop;
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -58,6 +62,7 @@ public class AuthorizationManagerTest {
         this.verificationAuthority = InetAddress.getByName("127.0.0.3");
         this.secondVerificationAuthority = InetAddress.getByName("127.0.0.5");
         this.nextHop = InetAddress.getByName("127.0.0.4");
+        this.secondNextHop = InetAddress.getByName("127.0.0.6");
 
         // The no-operation authenticator accepts every signature, so no key exchange over the network is required.
         this.authenticationClient = new AuthenticationClient(this.authorizationAuthority,
@@ -82,7 +87,7 @@ public class AuthorizationManagerTest {
     @Test
     public void testDeviatingActionDoesNotAuthorizeSessionInitialization() {
         AccessDecision sessionInitialization = grant(pattern(), this.nextHop, 60);
-        AccessDecision verification = new AccessDecision(pattern(), AccessDecision.Action.DENY, null,
+        AccessDecision verification = new AccessDecision(pattern(), AccessDecision.Action.DENY, Set.of(),
                 Instant.now().plusSeconds(60));
         assertFalse(AuthorizationManager.authorizes(verification, sessionInitialization));
     }
@@ -168,7 +173,7 @@ public class AuthorizationManagerTest {
         Thread worker = startThread(() -> manager.processMessage(message));
         assertInstanceOf(AccessVerificationRequestMessage.class, this.pollEgress());
 
-        AccessDecision deviating = new AccessDecision(pattern(), AccessDecision.Action.DENY, null,
+        AccessDecision deviating = new AccessDecision(pattern(), AccessDecision.Action.DENY, Set.of(),
                 Instant.now().plusSeconds(60));
         manager.processMessage(this.verification(deviating));
         join(worker);
@@ -252,7 +257,7 @@ public class AuthorizationManagerTest {
         AccessDecisionMessage message = this.sessionInitialization(decision);
 
         // The data frame finds no decision, triggers an access request, and is held
-        AtomicReference<Optional<PayloadExchangeMessage>> result = new AtomicReference<>();
+        AtomicReference<List<PayloadExchangeMessage>> result = new AtomicReference<>();
         Thread frame = startThread(() -> result.set(manager.authorizeOutgoing(packet())));
         assertInstanceOf(AccessRequestMessage.class, this.pollEgress());
 
@@ -264,8 +269,8 @@ public class AuthorizationManagerTest {
         join(worker);
         join(frame);
 
-        assertTrue(result.get().isPresent(), "The held frame must be forwarded once the decision is verified.");
-        assertEquals(this.nextHop, result.get().get().getDestination());
+        assertEquals(1, result.get().size(), "The held frame must be forwarded once the decision is verified.");
+        assertEquals(this.nextHop, result.get().get(0).getDestination());
     }
 
     @Test
@@ -273,20 +278,170 @@ public class AuthorizationManagerTest {
         AuthorizationManager manager = this.createManager(null, this.verificationAuthority);
         AccessDecisionMessage message = this.sessionInitialization(grant(pattern(), this.nextHop, 60));
 
-        AtomicReference<Optional<PayloadExchangeMessage>> result = new AtomicReference<>();
+        AtomicReference<List<PayloadExchangeMessage>> result = new AtomicReference<>();
         Thread frame = startThread(() -> result.set(manager.authorizeOutgoing(packet())));
         assertInstanceOf(AccessRequestMessage.class, this.pollEgress());
 
         Thread worker = startThread(() -> manager.processMessage(message));
         assertInstanceOf(AccessVerificationRequestMessage.class, this.pollEgress());
 
-        AccessDecision deviating = new AccessDecision(pattern(), AccessDecision.Action.DENY, null,
+        AccessDecision deviating = new AccessDecision(pattern(), AccessDecision.Action.DENY, Set.of(),
                 Instant.now().plusSeconds(60));
         manager.processMessage(this.verification(deviating));
         join(worker);
         join(frame);
 
         assertTrue(result.get().isEmpty(), "The held frame must be dropped if the session initialization is unverifiable.");
+    }
+
+    /**
+     * A data frame that awaits a session initialization is released only once all access decisions of that session
+     * initialization are installed, as its enforcement resolves the conflicts between all of them. The test holds a
+     * frame that awaits a granting and a denying decision of one session initialization and delays the verification
+     * of the denying one, so that releasing the frame prematurely would forward it although the session initialization
+     * denies it.
+     */
+    @Test
+    public void testHeldFrameIsReleasedAfterTheWholeSessionInitializationIsInstalled() throws Exception {
+        AuthorizationManager manager = this.createManager(null, this.verificationAuthority);
+        AccessDecision granting = grant(pattern(), this.nextHop, 60);
+        AccessDecision denying = new AccessDecision(pattern(), AccessDecision.Action.DENY, Set.of(),
+                Instant.now().plusSeconds(60));
+        AccessDecisionMessage message = this.sessionInitialization(granting, denying);
+
+        // The data frame finds no decision, triggers an access request, and is held
+        AtomicReference<List<PayloadExchangeMessage>> result = new AtomicReference<>();
+        Thread frame = startThread(() -> result.set(manager.authorizeOutgoing(packet())));
+        assertInstanceOf(AccessRequestMessage.class, this.pollEgress());
+
+        // The granting decision is verified first and must not release the held frame on its own
+        Thread worker = startThread(() -> manager.processMessage(message));
+        assertInstanceOf(AccessVerificationRequestMessage.class, this.pollEgress());
+        manager.processMessage(this.signedVerification(granting, this.verificationAuthority));
+
+        // The denying decision of the same session initialization is verified next
+        assertInstanceOf(AccessVerificationRequestMessage.class, this.pollEgress());
+        manager.processMessage(this.signedVerification(denying, this.verificationAuthority));
+        join(worker);
+        join(frame);
+
+        assertTrue(result.get().isEmpty(),
+                "A denying decision of the session initialization must override the granting one.");
+    }
+
+    //
+    // Decision enforcement for the two directions of a data frame flow
+    //
+
+    /**
+     * An outgoing data frame is forwarded to each next hop of the access decision that grants it, so that a decision
+     * permitting several recipients yields one payload exchange message per recipient.
+     */
+    @Test
+    public void testOutgoingFrameIsForwardedToEachNextHop() throws Exception {
+        AuthorizationManager manager = this.createManager(null, null);
+        AccessDecision decision = new AccessDecision(pattern(), AccessDecision.Action.GRANT,
+                Set.of(this.nextHop, this.secondNextHop), Instant.now().plusSeconds(60));
+        manager.processMessage(this.sessionInitialization(decision));
+
+        List<PayloadExchangeMessage> messages = manager.authorizeOutgoing(packet());
+        assertEquals(2, messages.size());
+        assertEquals(Set.of(this.nextHop, this.secondNextHop),
+                messages.stream().map(PayloadExchangeMessage::getDestination).collect(Collectors.toSet()));
+    }
+
+    /**
+     * An incoming data frame is accepted only by a PEP that the granting access decision permits as a recipient. A
+     * PEP that is not a next hop of the decision drops the data frame, even though the decision grants the flow.
+     */
+    @Test
+    public void testIncomingFrameIsRejectedByAPepThatIsNoNextHop() throws Exception {
+        AuthorizationManager manager = this.createManager(null, null);
+        manager.processMessage(this.sessionInitialization(grant(pattern(), this.nextHop, 60)));
+
+        assertFalse(manager.authorizeIncoming(this.payloadExchange()).isPresent(),
+                "A PEP must not accept the data frames of a flow it is no next hop of.");
+    }
+
+    /**
+     * A session initialization contains one or multiple access decisions, all of which a PEP adds to its local
+     * session state. A single session initialization therefore suffices to govern both directions of a bidirectional
+     * exchange between two SAS devices.
+     */
+    @Test
+    public void testSessionInitializationWithSeveralDecisionsInstallsAllOfThem() throws Exception {
+        AuthorizationManager manager = this.createManager(null, null);
+        manager.processMessage(this.sessionInitialization(grant(pattern(), this.scope, 60),
+                grant(pattern(), this.nextHop, 60)));
+
+        assertTrue(manager.authorizeIncoming(this.payloadExchange()).isPresent(),
+                "The decision naming this PEP as next hop governs the incoming data frames.");
+        assertEquals(1, manager.authorizeOutgoing(packet()).size(),
+                "The decision naming another PEP as next hop governs the outgoing data frames.");
+    }
+
+    /**
+     * A PEP distinguishes the absence of an applicable access decision from the absence of an access decision. If it
+     * holds a valid decision whose flow pattern matches the data frame but whose policy does not apply, no policy
+     * applies to the frame, so that the frame is dropped without repeating the access request for it.
+     */
+    @Test
+    public void testNonApplicableDecisionDropsOutgoingFrameWithoutAnAccessRequest() throws Exception {
+        AuthorizationManager manager = this.createManager(null, null);
+        AccessDecision decision = new AccessDecision(pattern(), AccessDecision.Action.NOTAPPLICABLE, Set.of(),
+                Instant.now().plusSeconds(60));
+        manager.processMessage(this.sessionInitialization(decision));
+        this.egress.clear();
+
+        assertTrue(manager.authorizeOutgoing(packet()).isEmpty(), "A frame without an applicable policy is dropped.");
+        assertTrue(this.egress.isEmpty(), "A matching decision must not trigger a repeated access request.");
+    }
+
+    /**
+     * A denying access decision is enforced for its period of validity, so that the data frames of a denied flow are
+     * dropped without an access request per data frame.
+     */
+    @Test
+    public void testDenyingDecisionDropsOutgoingFrameWithoutAnAccessRequest() throws Exception {
+        AuthorizationManager manager = this.createManager(null, null);
+        AccessDecision decision = new AccessDecision(pattern(), AccessDecision.Action.DENY, Set.of(),
+                Instant.now().plusSeconds(60));
+        manager.processMessage(this.sessionInitialization(decision));
+        this.egress.clear();
+
+        assertTrue(manager.authorizeOutgoing(packet()).isEmpty());
+        assertTrue(this.egress.isEmpty(), "A retained denial must not trigger a repeated access request.");
+    }
+
+    /**
+     * A PEP renews the access decisions of a flow before the first of the decisions it enforces for that flow
+     * expires, as that is the point in time at which a composite decision expires. A longer-lived decision of the
+     * same flow must not suppress the renewal: it would otherwise take over silently once the shorter-lived decision
+     * expired, e.g. a general grant taking over from a denial that excludes a subset of the granted flow, and the
+     * PEP would never ask the PDP again.
+     */
+    @Test
+    public void testOutgoingFrameRenewsTheDecisionsBeforeTheEarliestOfThemExpires() throws Exception {
+        AuthorizationManager manager = this.createManager(null, null);
+        // The shorter-lived decision is valid, but expires within the validity offset of the PEP.
+        AccessDecision expiring = new AccessDecision(pattern(), AccessDecision.Action.GRANT, Set.of(this.nextHop),
+                Instant.now().plusMillis(99));
+        AccessDecision longLived = grant(pattern(), this.nextHop, 60);
+        AccessDecisionMessage message = this.sessionInitialization(expiring, longLived);
+        AccessDecisionMessage renewal = this.sessionInitialization(grant(pattern(), this.nextHop, 60));
+        this.egress.clear();
+        manager.processMessage(message);
+
+        // The data frame triggers a renewal although the longer-lived decision still grants it
+        AtomicReference<List<PayloadExchangeMessage>> result = new AtomicReference<>();
+        Thread frame = startThread(() -> result.set(manager.authorizeOutgoing(packet())));
+        assertInstanceOf(AccessRequestMessage.class, this.pollEgress(),
+                "An access decision that expires within the validity offset has to be renewed.");
+
+        manager.processMessage(renewal);
+        join(frame);
+        assertEquals(1, result.get().size(), "The held frame is forwarded once the renewal arrived.");
+        assertEquals(this.nextHop, result.get().get(0).getDestination());
     }
 
     //
@@ -328,8 +483,8 @@ public class AuthorizationManagerTest {
         }
     }
 
-    private AccessDecisionMessage sessionInitialization(AccessDecision decision) throws Exception {
-        return new AccessDecisionMessage(this.authorizationAuthority, this.scope, null, decision)
+    private AccessDecisionMessage sessionInitialization(AccessDecision... decisions) throws Exception {
+        return new AccessDecisionMessage(this.authorizationAuthority, this.scope, null, List.of(decisions))
                 .sign(remoteAuthenticator());
     }
 

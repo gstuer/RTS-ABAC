@@ -122,7 +122,10 @@ public abstract class AccessRequestPattern implements Signable, Comparable<Acces
 
     @Override
     public byte[] getSigningData() {
-        return this.enclosedPattern.getSigningData();
+        // A pattern without an enclosed pattern contributes no further signing data, as it constrains no further
+        // protocol layer. Such a pattern is a valid flow pattern, e.g. one constraining an IP layer without
+        // constraining the link layer beneath it.
+        return this.hasEnclosedPattern() ? this.enclosedPattern.getSigningData() : new byte[0];
     }
 
     @Override

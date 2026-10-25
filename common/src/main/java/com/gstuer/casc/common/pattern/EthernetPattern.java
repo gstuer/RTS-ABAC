@@ -71,6 +71,9 @@ public class EthernetPattern extends AccessRequestPattern {
 
     @Override
     public byte[] getSigningData() {
-        return Bytes.concat(source.getAddress(), destination.getAddress(), Shorts.toByteArray(etherType.value()));
+        // The signing data covers the enclosed pattern as well, so that every pattern of a flow pattern chain
+        // contributes to the signature of an access decision.
+        return Bytes.concat(source.getAddress(), destination.getAddress(), Shorts.toByteArray(etherType.value()),
+                super.getSigningData());
     }
 }

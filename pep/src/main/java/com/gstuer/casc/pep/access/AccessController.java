@@ -11,6 +11,7 @@ import com.gstuer.casc.common.message.PayloadExchangeMessage;
 import org.pcap4j.packet.Packet;
 
 import java.net.InetAddress;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
@@ -41,18 +42,20 @@ public class AccessController {
     }
 
     public void handleOutgoingRequest(Packet packet) {
-        // Step 1: Check authorization for outgoing packet
-        Optional<PayloadExchangeMessage> optionalMessage = this.authorizationManager.authorizeOutgoing(packet);
-        if (optionalMessage.isEmpty()) {
+        // Step 1: Check authorization for outgoing packet, which yields one message per permitted next hop
+        List<PayloadExchangeMessage> messages = this.authorizationManager.authorizeOutgoing(packet);
+        if (messages.isEmpty()) {
             System.out.println("[AC] Unauthorized outgoing packet: " + packet.getHeader());
             return;
         }
 
-        // Step 2: Derive signature for payload exchange message
-        Optional<AccessControlMessage<?>> signedMessage = this.authenticationClient.signMessage(optionalMessage.get());
+        for (PayloadExchangeMessage message : messages) {
+            // Step 2: Derive signature for payload exchange message
+            Optional<AccessControlMessage<?>> signedMessage = this.authenticationClient.signMessage(message);
 
-        // Step 3: Queue access request for insecure egress
-        signedMessage.ifPresent(this.messageEgress::offer);
+            // Step 3: Queue access request for insecure egress
+            signedMessage.ifPresent(this.messageEgress::offer);
+        }
     }
 
     public void handleIncomingRequest(AccessControlMessage<?> accessControlMessage) {

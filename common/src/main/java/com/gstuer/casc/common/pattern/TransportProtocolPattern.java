@@ -1,7 +1,8 @@
 package com.gstuer.casc.common.pattern;
 
+import com.google.common.primitives.Bytes;
 import com.google.common.primitives.Ints;
-import org.apache.commons.lang3.ArrayUtils;
+import org.pcap4j.packet.namednumber.IpNumber;
 
 import java.util.Objects;
 
@@ -57,7 +58,19 @@ public abstract class TransportProtocolPattern extends AccessRequestPattern {
 
     @Override
     public byte[] getSigningData() {
-        return ArrayUtils.addAll(Ints.toByteArray(sourcePort),
-                ArrayUtils.addAll(Ints.toByteArray(destinationPort), super.getSigningData()));
+        // The transport protocol and the enclosed pattern are part of the signing data, as two patterns of
+        // different transport protocols constrain different data frames although they constrain an equal pair of
+        // ports, and as this pattern constrains the protocol layers beneath the transport layer through its
+        // enclosed pattern.
+        return Bytes.concat(new byte[]{this.getTransportProtocol().value()}, Ints.toByteArray(sourcePort),
+                Ints.toByteArray(destinationPort), super.getSigningData());
     }
+
+    /**
+     * Gets the transport protocol constrained by this pattern. It is part of the identity of a pattern, as two
+     * patterns of different transport protocols are unequal even if they constrain an equal pair of ports.
+     *
+     * @return the transport protocol of this pattern.
+     */
+    protected abstract IpNumber getTransportProtocol();
 }

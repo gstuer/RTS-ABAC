@@ -70,6 +70,10 @@ public class IpPattern extends AccessRequestPattern {
 
     @Override
     public byte[] getSigningData() {
-        return Bytes.concat(source.getAddress(), destination.getAddress(), new byte[]{protocol.value()});
+        // The signing data covers the enclosed pattern as well, as this pattern constrains the protocol layers
+        // beneath the IP layer through it. Without them, a decision for one link layer flow would be signed
+        // identically to a decision for another one.
+        return Bytes.concat(source.getAddress(), destination.getAddress(), new byte[]{protocol.value()},
+                super.getSigningData());
     }
 }

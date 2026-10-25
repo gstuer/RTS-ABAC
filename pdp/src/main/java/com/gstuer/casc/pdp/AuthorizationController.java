@@ -23,9 +23,13 @@ import org.pcap4j.util.MacAddress;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.time.Duration;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 public class AuthorizationController {
     private final AuthenticationClient authenticationClient;
@@ -178,35 +182,32 @@ public class AuthorizationController {
                 return;
             }
 
-            // Get matching decisions for message
+            // Get all matching decisions for message
             AccessRequestPattern pattern = message.getPayload();
-            AccessDecision decision = this.evaluationManager.getDecision(pattern);
+            List<AccessDecision> decisions = this.evaluationManager.getDecisions(pattern);
 
-            // Send decision to next hop if granted
-            if (decision.isGranting()) {
-                AccessDecisionMessage decisionMessage = new AccessDecisionMessage(decision.getNextHop(), null, decision);
-                Optional<AccessControlMessage<?>> optionalSignedMessage = authenticationClient.signMessage(decisionMessage);
-                if (optionalSignedMessage.isPresent()) {
-                    this.egressQueue.offer(optionalSignedMessage.get());
-                } else {
-                    System.out.println("[PDP] Signing failed.");
+            // Send the session initialization to each next hop of a granting decision, excluding the requester, which
+            // receives the session initialization below.
+            Set<InetAddress> nextHops = decisions.stream().filter(AccessDecision::isGranting)
+                    .flatMap(decision -> decision.getNextHops().stream())
+                    .collect(Collectors.toCollection(HashSet::new));
+            nextHops.remove(message.getSource());
+            for (InetAddress nextHop : nextHops) {
+                if (!this.offerSessionInitialization(nextHop, decisions)) {
                     return;
                 }
             }
 
-            // Send decision to requester
-            AccessDecisionMessage decisionMessage = new AccessDecisionMessage(message.getSource(), null, decision);
-            Optional<AccessControlMessage<?>> optionalSignedMessage = authenticationClient.signMessage(decisionMessage);
-            if (optionalSignedMessage.isPresent()) {
-                this.egressQueue.offer(optionalSignedMessage.get());
-                if (decision.isGranting()) {
-                    System.out.printf("[PDP] Grant: %s -> %s. (took %d µs)\n", message.getSource(), decision.getNextHop(), TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - arrivalTime));
-                } else {
-                    System.out.printf("[PDP] Deny: %s. (took %d µs)\n", message.getSource(), TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - arrivalTime));
-                }
-            } else {
-                System.out.println("[PDP] Signing failed.");
+            // Send the session initialization to the requester
+            if (!this.offerSessionInitialization(message.getSource(), decisions)) {
                 return;
+            }
+            long serviceTime = TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - arrivalTime);
+            if (decisions.stream().anyMatch(AccessDecision::isGranting)) {
+                System.out.printf("[PDP] Grant: %s -> %s. (took %d µs)\n", message.getSource(), nextHops,
+                        serviceTime);
+            } else {
+                System.out.printf("[PDP] Deny: %s. (took %d µs)\n", message.getSource(), serviceTime);
             }
         } else if (accessControlMessage instanceof AccessVerificationRequestMessage message) {
             // Verify signature
@@ -215,8 +216,9 @@ public class AuthorizationController {
             }
 
             // Get matching decision for the flow pattern whose session initialization is verified
+            // TODO Respond with all matching decisions once the verification protocol is revised.
             AccessRequestPattern pattern = message.getPayload();
-            AccessDecision decision = this.evaluationManager.getDecision(pattern);
+            AccessDecision decision = this.evaluationManager.getDecisions(pattern).get(0);
 
             // Send decision to the requester only, i.e. without initializing sessions at the next hop PEPs
             AccessVerificationMessage verificationMessage = new AccessVerificationMessage(message.getSource(), null, decision);
@@ -231,5 +233,23 @@ public class AuthorizationController {
         } else {
             System.out.println("[PDP] Unknown message type.");
         }
+    }
+
+    /**
+     * Signs a session initialization containing the given access decisions and queues it for the given PEP.
+     *
+     * @param destination the address of the PEP receiving the session initialization
+     * @param decisions   the access decisions to be sent
+     * @return {@code true} if the session initialization was queued, {@code false} if signing failed.
+     */
+    private boolean offerSessionInitialization(InetAddress destination, List<AccessDecision> decisions) {
+        AccessDecisionMessage decisionMessage = new AccessDecisionMessage(destination, null, decisions);
+        Optional<AccessControlMessage<?>> optionalSignedMessage = this.authenticationClient.signMessage(decisionMessage);
+        if (optionalSignedMessage.isEmpty()) {
+            System.out.println("[PDP] Signing failed.");
+            return false;
+        }
+        this.egressQueue.offer(optionalSignedMessage.get());
+        return true;
     }
 }

@@ -2,6 +2,8 @@ package com.gstuer.casc.pep.access;
 
 import com.gstuer.casc.common.AccessDecision;
 import com.gstuer.casc.common.AuthenticationClient;
+import com.gstuer.casc.common.DecisionResolver;
+import com.gstuer.casc.common.DecisionResolver.DecisionResolution;
 import com.gstuer.casc.common.concurrency.RequestableAccessDecision;
 import com.gstuer.casc.common.concurrency.RequestableAccessVerification;
 import com.gstuer.casc.common.concurrency.exception.RequestTimeoutException;
@@ -15,9 +17,12 @@ import org.pcap4j.packet.Packet;
 
 import java.net.InetAddress;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.temporal.TemporalAmount;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.SortedSet;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -75,60 +80,77 @@ public class AuthorizationManager {
         this.incomingDecisions = new ConcurrentSkipListSet<>();
     }
 
-    public Optional<PayloadExchangeMessage> authorizeOutgoing(Packet packet) {
+    /**
+     * Authorizes an outgoing data frame by resolving the access decisions available for outgoing data frames. An
+     * outgoing data frame is forwarded to each next hop of the resolved decision, so that one payload exchange
+     * message per next hop results.
+     *
+     * @param packet the outgoing data frame
+     * @return the payload exchange messages to be sent, which is empty if the data frame has to be dropped.
+     */
+    public List<PayloadExchangeMessage> authorizeOutgoing(Packet packet) {
         AccessRequestPattern pattern = PatternFactory.derivePatternFrom(packet);
-        Optional<AccessDecision> optionalDecision = this.outgoingDecisions.stream().parallel()
-                .filter(decision -> pattern.contains(decision.getPattern())
-                        && decision.isValid(ACCESS_DECISION_VALIDITY_OFFSET))
-                .findFirst();
+        Optional<DecisionResolution> optionalResolution = DecisionResolver.getResolution(this.outgoingDecisions,
+                pattern, Instant.now());
 
-        if (optionalDecision.isPresent()) {
-            AccessDecision decision = optionalDecision.get();
-            if (decision.isGranting()) {
-                // Access Granted -> Construct unsigned payload exchange message
-                PayloadExchangeMessage message = new PayloadExchangeMessage(decision.getNextHop(), null, packet);
-                return Optional.of(message);
-            }
-            // Access Denied -> Reject packet
-            return Optional.empty();
-        } else {
-            // Request new decision from authorization authority
+        if (optionalResolution.isEmpty() || this.isExpiring(optionalResolution.get())) {
+            // No current access decision governs the data frame -> Request one from the authorization authority
             RequestableAccessDecision requestableDecision = this.requestedDecisions.computeIfAbsent(pattern,
                     key -> new RequestableAccessDecision(this.messageEgress, this.authenticationClient.getSigner(),
                             authorizationAuthority, pattern));
 
-            // Wait until decision is available
-            AccessDecision decision;
+            // Wait until the session initialization was processed
             try {
-                decision = requestableDecision.get();
+                requestableDecision.get();
             } catch (RequestTimeoutException exception) {
-                return Optional.empty();
+                return List.of();
             }
 
-            // If decision was positive return unsigned payload exchange message, return empty optional otherwise
-            PayloadExchangeMessage message = null;
-            if (decision.isGranting() && decision.isValid()) {
-                message = new PayloadExchangeMessage(decision.getNextHop(), null, packet);
-            }
-            return Optional.ofNullable(message);
+            // Resolve again, as a session initialization may contain multiple conflicting access decisions
+            optionalResolution = DecisionResolver.getResolution(this.outgoingDecisions, pattern, Instant.now());
         }
+
+        // A granted data frame is forwarded to each next hop, a denied one is dropped
+        return optionalResolution.filter(DecisionResolution::isGranting)
+                .map(resolution -> resolution.nextHops().stream()
+                        .map(nextHop -> new PayloadExchangeMessage(nextHop, null, packet))
+                        .toList())
+                .orElseGet(List::of);
     }
 
+    /**
+     * Checks whether a resolution expires within the validity offset, so that the access decisions it was derived
+     * from have to be renewed before the data frames of their flow are dropped. A resolution expires as soon as the
+     * first of the decisions it was derived from expires, which is the period of validity of the composite decision
+     * of conflicting decisions. Renewing at that point in time rather than at the last expiry keeps a decision from
+     * silently ceasing to constrain a flow, e.g. a denial that excludes a subset of a flow which a more general and
+     * longer-lived decision grants.
+     *
+     * @param resolution the resolution of the access decisions currently available for a data frame
+     * @return {@code true} if the resolution has to be renewed, {@code false} otherwise.
+     */
+    private boolean isExpiring(DecisionResolution resolution) {
+        return resolution.validUntil().isBefore(Instant.now().plus(ACCESS_DECISION_VALIDITY_OFFSET));
+    }
+
+    /**
+     * Authorizes an incoming data frame by resolving the access decisions available for incoming data frames. An
+     * incoming data frame is accepted only if the resolved decision grants it and permits this PEP to receive it.
+     *
+     * @param message the payload exchange message carrying the incoming data frame
+     * @return the data frame to be delivered, or an empty optional if it has to be dropped.
+     */
     public Optional<Packet> authorizeIncoming(PayloadExchangeMessage message) {
         // Reject empty payload exchange message
         if (!message.hasPayload()) {
             return Optional.empty();
         }
 
-        // Check if pattern for message exists in incoming rules
         AccessRequestPattern pattern = PatternFactory.derivePatternFrom(message.getPayload());
-        Optional<AccessDecision> optionalDecision = this.incomingDecisions.stream().parallel()
-                .filter(decision -> pattern.contains(decision.getPattern())
-                        && decision.isGranting() && decision.isValid())
-                .findFirst();
-
-        // Return payload if decision is present, return empty optional otherwise
-        if (optionalDecision.isPresent()) {
+        Optional<DecisionResolution> optionalResolution = DecisionResolver.getResolution(this.incomingDecisions,
+                pattern, Instant.now());
+        if (optionalResolution.filter(DecisionResolution::isGranting)
+                .filter(resolution -> resolution.isNextHop(this.authorizationScope)).isPresent()) {
             return Optional.of(message.getPayload());
         }
         return Optional.empty();
@@ -141,29 +163,56 @@ public class AuthorizationManager {
             return;
         }
 
-        // Add decision to either the outgoing or incoming rules
-        AccessDecision decision = message.getPayload();
-        if (authorizationScope.equals(decision.getNextHop())) {
-            // If nextHop equals own scope, decision is still valid, & is granted -> Add to incoming rules
-            if (decision.isGranting() && decision.isValid()
-                    && this.isVerified(decision, this.incomingVerificationAuthority)) {
-                // Only save granted decisions as incoming rules
-                this.incomingDecisions.add(decision);
+        // A session initialization contains the access decisions of all policies matching the access request. All of
+        // them are installed before the data frames awaiting the session initialization are released, as the
+        // enforcement of such a frame resolves the conflicts between all decisions of the session initialization. A
+        // frame released beforehand would be enforced using an incomplete set of decisions, e.g. using a granting
+        // decision that a denying one of the same session initialization overrides.
+        List<AccessDecision> releasingDecisions = message.getPayload().stream()
+                .map(this::installDecision).flatMap(Optional::stream).toList();
+        releasingDecisions.forEach(this::resolveRequests);
+    }
+
+    /**
+     * Adds a single access decision of a session initialization to the local session state. A granting decision
+     * governs the incoming data frames of this PEP if this PEP is one of its next hops, and the outgoing ones
+     * otherwise. A decision that neither grants nor applies has an empty next hop set and may exclude a subset of a
+     * flow that is granted in either direction, which is why it is added to both sets.
+     *
+     * @param decision the access decision of a session initialization
+     * @return the access decision that releases the outgoing data frames awaiting the session initialization, or an
+     * empty optional if the given decision governs the incoming data frames only.
+     */
+    private Optional<AccessDecision> installDecision(AccessDecision decision) {
+        if (!decision.isValid()) {
+            // An expired decision is not enforced, but releases the data frames awaiting it so that they are dropped
+            return Optional.of(decision);
+        }
+
+        if (decision.isGranting()) {
+            if (decision.isNextHop(this.authorizationScope)) {
+                if (this.isVerified(decision, this.incomingVerificationAuthority)) {
+                    this.incomingDecisions.add(decision);
+                }
+                // An incoming decision governs the data frames this PEP receives, none of which awaits a decision.
+                return Optional.empty();
             }
-        } else if (decision.isValid()) {
-            // If nextHop does not equal own scope, add decision to outgoing rules and resolve possible waiting packets
             if (this.isVerified(decision, this.outgoingVerificationAuthority)) {
                 this.outgoingDecisions.add(decision);
-                this.resolveRequests(decision);
-            } else {
-                // The session initialization is discarded without informing the issuing PDP. The data frames awaiting
-                // it are resolved with a denial, so that they are dropped instead of awaiting the request timeout.
-                this.resolveRequests(denialOf(decision));
+                return Optional.of(decision);
             }
-        } else {
-            // If nextHop does not equal own scope and decision is not valid (anymore), only resolve waiting packets
-            this.resolveRequests(decision);
+            // The session initialization is discarded without informing the issuing PDP. The data frames awaiting it
+            // are released with a denial, so that they are dropped instead of awaiting the request timeout.
+            return Optional.of(denialOf(decision));
         }
+
+        // A denying or non-applicable decision constrains both directions and permits no recipient
+        if (this.isVerified(decision, this.outgoingVerificationAuthority)) {
+            this.incomingDecisions.add(decision);
+            this.outgoingDecisions.add(decision);
+            return Optional.of(decision);
+        }
+        return Optional.of(denialOf(decision));
     }
 
     public void processMessage(AccessVerificationMessage message) {
@@ -199,11 +248,12 @@ public class AuthorizationManager {
         // A deviating action or next hop indicates a fault, a compromise, or an attribute value that changed between
         // the two evaluations. In either case the session initialization does not become effective.
         return verification.isValid() && verification.getAction() == sessionInitialization.getAction()
-                && Objects.equals(verification.getNextHop(), sessionInitialization.getNextHop());
+                && Objects.equals(verification.getNextHops(), sessionInitialization.getNextHops());
     }
 
     private static AccessDecision denialOf(AccessDecision decision) {
-        return new AccessDecision(decision.getPattern(), AccessDecision.Action.DENY, null, decision.getValidUntil());
+        return new AccessDecision(decision.getPattern(), AccessDecision.Action.DENY, Set.of(),
+                decision.getValidUntil());
     }
 
     /**
@@ -260,7 +310,9 @@ public class AuthorizationManager {
                 .filter(entry -> entry.getValue().isUnavailable() && entry.getKey().contains(pattern))
                 .forEach(entry -> {
                     entry.getValue().set(decision);
-                    this.requestedDecisions.remove(entry.getKey());
+                    // A request issued concurrently for the same flow pattern is left in place, as its requester
+                    // awaits a session initialization that is yet to arrive.
+                    this.requestedDecisions.remove(entry.getKey(), entry.getValue());
                 });
     }
 
