@@ -1,7 +1,8 @@
-package com.gstuer.casc.common.attribute;
+package com.gstuer.casc.pdp.attribute;
 
 import com.gstuer.casc.common.AuthenticationClient;
-import com.gstuer.casc.common.concurrency.RequestablePolicyAttribute;
+import com.gstuer.casc.common.attribute.AttributeIdentifier;
+import com.gstuer.casc.common.attribute.PolicyAttribute;
 import com.gstuer.casc.common.concurrency.exception.RequestTimeoutException;
 import com.gstuer.casc.common.message.AccessControlMessage;
 import com.gstuer.casc.common.message.AttributeExchangeMessage;
@@ -17,6 +18,15 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Fetches the {@link PolicyAttribute attributes} that the policies of a policy decision point (PDP) require from the
+ * AASPs that publish them, and holds each value for the period of validity the publishing AASP vouches for.
+ * <p>
+ * A subscribed attribute is requested again shortly before its value expires, so that the PDP evaluates its
+ * policies against a value an AASP currently vouches for rather than fetching attributes on the critical path of an
+ * access request. A value whose period of validity has elapsed is discarded, which makes the policies requiring it
+ * non-applicable until a current value arrives.
+ */
 public class AttributeSubscriber {
     private final ConcurrentMap<AttributeIdentifier, RequestablePolicyAttribute> attributeRequests;
     private final ConcurrentMap<AttributeIdentifier, PolicyAttribute<?>> attributes;

@@ -3,7 +3,7 @@ package com.gstuer.casc.pdp;
 import com.gstuer.casc.common.AccessDecision;
 import com.gstuer.casc.common.AccessPolicy;
 import com.gstuer.casc.common.attribute.AttributeIdentifier;
-import com.gstuer.casc.common.attribute.AttributeSubscriber;
+import com.gstuer.casc.pdp.attribute.AttributeSubscriber;
 import com.gstuer.casc.common.attribute.PolicyAttribute;
 import com.gstuer.casc.common.attribute.predicate.PolicyPredicate;
 

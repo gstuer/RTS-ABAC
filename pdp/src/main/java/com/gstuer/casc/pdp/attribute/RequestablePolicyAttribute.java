@@ -1,7 +1,8 @@
-package com.gstuer.casc.common.concurrency;
+package com.gstuer.casc.pdp.attribute;
 
 import com.gstuer.casc.common.attribute.AttributeIdentifier;
 import com.gstuer.casc.common.attribute.PolicyAttribute;
+import com.gstuer.casc.common.concurrency.RequestableResource;
 import com.gstuer.casc.common.cryptography.Signer;
 import com.gstuer.casc.common.message.AccessControlMessage;
 import com.gstuer.casc.common.message.AttributeExchangeRequestMessage;

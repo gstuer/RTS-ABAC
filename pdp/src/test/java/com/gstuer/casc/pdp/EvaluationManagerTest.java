@@ -4,7 +4,7 @@ import com.gstuer.casc.common.AccessDecision;
 import com.gstuer.casc.common.AccessDecisionVerdict;
 import com.gstuer.casc.common.AccessPolicy;
 import com.gstuer.casc.common.AuthenticationClient;
-import com.gstuer.casc.common.attribute.AttributeSubscriber;
+import com.gstuer.casc.pdp.attribute.AttributeSubscriber;
 import com.gstuer.casc.common.attribute.predicate.StaticResultPredicate;
 import com.gstuer.casc.common.cryptography.NoOperationAuthenticator;
 import com.gstuer.casc.common.message.AccessControlMessage;
