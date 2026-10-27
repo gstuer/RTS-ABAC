@@ -22,7 +22,7 @@ import java.util.Set;
  */
 public class AccessPolicy {
     private static final AccessDecision.Action INAPPLICABLE_ACTION = AccessDecision.Action.NOTAPPLICABLE;
-    private static final TemporalAmount DEFAULT_VALIDITY = Duration.ofSeconds(60);
+    private static final TemporalAmount UNAVAILABLE_ATTRIBUTE_VALIDITY = Duration.ofMillis(500);
 
     private final AccessRequestPattern flowPattern;
     private final AccessDecision.Action action;
@@ -78,10 +78,12 @@ public class AccessPolicy {
             // Evaluation was possible for current system state
             evaluation = predicate.evaluate(attributes);
         } catch (UnavailableAttributeException exception) {
-            // Evaluation was not possible due to unavailable attribute values
-            // -> Should only happen during initial attribute fetching phase.
+            // Evaluation was not possible due to unavailable attribute values, which happens while the attributes of
+            // a policy are fetched from their AASPs for the first time or while an AASP is unreachable. The derived
+            // decision is valid briefly only, so that the PDP derives a decision from the attribute values as soon
+            // as they arrive instead of treating the policy as non-applicable for a full period of validity.
             return new AccessDecision(flowPattern, INAPPLICABLE_ACTION, Set.of(),
-                    Instant.now().plus(DEFAULT_VALIDITY));
+                    Instant.now().plus(UNAVAILABLE_ATTRIBUTE_VALIDITY));
         }
 
         if (evaluation.isPositive()) {

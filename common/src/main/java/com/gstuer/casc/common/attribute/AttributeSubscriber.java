@@ -78,22 +78,34 @@ public class AttributeSubscriber {
     public void processVerifiedMessage(AttributeExchangeMessage message) {
         Set<PolicyAttribute<?>> attributes = message.getPayload();
         for (PolicyAttribute<?> attribute : attributes) {
-            if (attribute.isValid()) {
-                // Get attribute request for valid attribute
-                RequestablePolicyAttribute request = this.attributeRequests.get(attribute.getIdentifier());
-                if (request != null) {
-                    // Check if request was fulfilled by correct provider
-                    // Note: Source of message is correct, i.e., was verified prior to this check.
-                    if (!request.getIdentifier().getProvider().equals(message.getSource())) {
-                        // Reject exchanged attribute
-                        continue;
-                    }
-
-                    // If request exists, fulfill request and remove request from request stack.
-                    this.attributes.put(attribute.getIdentifier(), attribute);
-                    request.set(attribute);
-                }
+            AttributeIdentifier identifier = attribute.getIdentifier();
+            if (!attribute.isValid()) {
+                // An attribute value whose period of validity does not include the current instant is of no use, as
+                // no AASP vouches for it at this point in time.
+                System.out.printf("[AM] Attribute \"%s\" discarded: valid from %s until %s.\n",
+                        identifier.getName(), attribute.getValidFrom(), attribute.getValidUntil());
+                continue;
             }
+
+            // Get attribute request for valid attribute
+            RequestablePolicyAttribute request = this.attributeRequests.get(identifier);
+            if (Objects.isNull(request)) {
+                System.out.printf("[AM] Attribute \"%s\" discarded: no request is pending for it.\n",
+                        identifier.getName());
+                continue;
+            }
+
+            // Check if request was fulfilled by correct provider
+            // Note: Source of message is correct, i.e., was verified prior to this check.
+            if (!request.getIdentifier().getProvider().equals(message.getSource())) {
+                System.out.printf("[AM] Attribute \"%s\" discarded: %s is not its provider.\n",
+                        identifier.getName(), message.getSource().getHostAddress());
+                continue;
+            }
+
+            // If request exists, fulfill request and remove request from request stack.
+            this.attributes.put(identifier, attribute);
+            request.set(attribute);
         }
     }
 

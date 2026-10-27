@@ -27,7 +27,7 @@ public class AttributeExchangeMessage extends AccessControlMessage<Set<PolicyAtt
 
     @Override
     public AttributeExchangeMessage fromSource(InetAddress source) {
-        return new AttributeExchangeMessage(this.getSource(), this.getDestination(), this.getSignature(), this.getPayload());
+        return new AttributeExchangeMessage(source, this.getDestination(), this.getSignature(), this.getPayload());
     }
 
     @Override

@@ -321,6 +321,35 @@ public class JsonProcessorTest {
         assertEquals(message, deserialMessage);
     }
 
+    /**
+     * An AASP publishes attributes whose value is read from a source on every refresh, i.e. attributes that hold a
+     * value supplier. Such an attribute has to survive the wire format, as it is what an AASP serves to the PDPs.
+     */
+    @Test
+    public void testSerializationAndDeserializationOfPublishedAttribute() throws SerializationException,
+            UnknownHostException {
+        // Test data
+        JsonProcessor jsonProcessor = new JsonProcessor();
+        InetAddress provider = InetAddress.getByName("127.0.0.1");
+        AttributeIdentifier identifier = new AttributeIdentifier("intruded", provider);
+        PolicyAttribute<?> attribute = LongAttribute.createFromData(identifier, Duration.ofSeconds(5), () -> "1");
+        DigitalSignature signature = new DigitalSignature(new byte[]{1, 2, 3, 4}, "test");
+        AttributeExchangeMessage message = new AttributeExchangeMessage(provider, signature, Set.of(attribute));
+
+        // Execution
+        byte[] serialMessage = jsonProcessor.serialize(message);
+        AccessControlMessage<?> deserialMessage = jsonProcessor.deserialize(serialMessage, AccessControlMessage.class);
+
+        // Assertions
+        AttributeExchangeMessage exchangeMessage = assertInstanceOf(AttributeExchangeMessage.class, deserialMessage);
+        assertEquals(1, exchangeMessage.getPayload().size());
+        PolicyAttribute<?> deserialAttribute = exchangeMessage.getPayload().iterator().next();
+        assertEquals(identifier, deserialAttribute.getIdentifier(),
+                "The identifier determines which attribute request the value satisfies.");
+        assertEquals(1L, deserialAttribute.getValue());
+        assertArrayEquals(attribute.getSigningData(), deserialAttribute.getSigningData());
+    }
+
     @Test
     public void testSerializationAndDeserializationOfAccessVerificationRequestMessage() throws SerializationException, UnknownHostException {
         // Test data

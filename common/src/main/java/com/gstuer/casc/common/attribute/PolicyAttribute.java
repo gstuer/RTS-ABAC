@@ -19,7 +19,13 @@ public abstract class PolicyAttribute<T> implements Signable, Serializable {
     private final Duration validityDuration;
     private Instant validFrom;
     private T value;
-    private Supplier<T> valueSupplier;
+
+    /**
+     * The supplier of the value of this attribute, which is how the publishing AASP obtains the value from the
+     * source of the attribute. It is a local concern of that AASP and therefore not part of the transmitted
+     * attribute, which carries the value the AASP vouches for rather than the way it was obtained.
+     */
+    private transient Supplier<T> valueSupplier;
 
     public PolicyAttribute(AttributeIdentifier identifier, Instant validFrom, Duration validityDuration, T value) {
         this.identifier = Objects.requireNonNull(identifier);
@@ -103,13 +109,14 @@ public abstract class PolicyAttribute<T> implements Signable, Serializable {
             return false;
         }
         PolicyAttribute<?> that = (PolicyAttribute<?>) object;
+        // The value supplier is no part of the identity of an attribute: it states how the publishing AASP obtains
+        // the value, so that a transmitted attribute equals the published one it was derived from.
         return Objects.equals(identifier, that.identifier) && Objects.equals(validFrom, that.validFrom)
-                && Objects.equals(validityDuration, that.validityDuration) && Objects.equals(value, that.value)
-                && Objects.equals(valueSupplier, that.valueSupplier);
+                && Objects.equals(validityDuration, that.validityDuration) && Objects.equals(value, that.value);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(identifier, validFrom, validityDuration, value, valueSupplier);
+        return Objects.hash(identifier, validFrom, validityDuration, value);
     }
 }

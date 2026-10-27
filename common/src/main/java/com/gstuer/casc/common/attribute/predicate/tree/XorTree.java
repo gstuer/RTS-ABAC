@@ -32,21 +32,12 @@ public class XorTree extends PredicateTree {
         Evaluation right = getRightChild().evaluate(attributes);
 
         // Derive tree evaluation from children
+        // The result of an exclusive disjunction depends on both evaluations, as it flips as soon as either of them
+        // changes. The earliest time for re-evaluation therefore defines the end of validity, so that the result is
+        // not enforced beyond the period for which an AASP vouches for either of the attribute values it was derived
+        // from.
         boolean result = left.isPositive() ^ right.isPositive();
-        Instant endOfValidity;
-        if (left.isPositive() && right.isPositive()) {
-            // Both are positive, XOR is negative
-            // -> Earliest time for re-evaluation (min of times) defines end of validity
-            endOfValidity = InstantUtility.min(left.getEndOfValidity(), right.getEndOfValidity());
-        } else if (left.isPositive()) {
-            endOfValidity = left.getEndOfValidity();
-        } else if (right.isPositive()) {
-            endOfValidity = right.getEndOfValidity();
-        } else {
-            // Both are negative, XOR is negative
-            // -> Earliest time for re-evaluation (min of times) defines end of validity
-            endOfValidity = InstantUtility.min(left.getEndOfValidity(), right.getEndOfValidity());
-        }
+        Instant endOfValidity = InstantUtility.min(left.getEndOfValidity(), right.getEndOfValidity());
         return new Evaluation(result, endOfValidity);
     }
 }

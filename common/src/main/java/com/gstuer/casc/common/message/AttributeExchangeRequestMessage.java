@@ -27,7 +27,7 @@ public class AttributeExchangeRequestMessage extends AccessControlMessage<Set<At
 
     @Override
     public AttributeExchangeRequestMessage fromSource(InetAddress source) {
-        return new AttributeExchangeRequestMessage(this.getSource(), this.getDestination(), this.getSignature(), this.getPayload());
+        return new AttributeExchangeRequestMessage(source, this.getDestination(), this.getSignature(), this.getPayload());
     }
 
     @Override

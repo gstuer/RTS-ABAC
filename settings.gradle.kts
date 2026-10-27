@@ -11,4 +11,4 @@ plugins {
 }
 
 rootProject.name = "CASC-SAS"
-include("common", "pep", "pdp")
+include("common", "pep", "pdp", "aasp")

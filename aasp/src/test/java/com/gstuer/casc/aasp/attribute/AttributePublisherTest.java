@@ -1,5 +1,7 @@
-package com.gstuer.casc.common.attribute;
+package com.gstuer.casc.aasp.attribute;
 
+import com.gstuer.casc.common.attribute.AttributeIdentifier;
+import com.gstuer.casc.common.attribute.LongAttribute;
 import com.gstuer.casc.common.AuthenticationClient;
 import com.gstuer.casc.common.cryptography.NoOperationAuthenticator;
 import com.gstuer.casc.common.message.AccessControlMessage;
