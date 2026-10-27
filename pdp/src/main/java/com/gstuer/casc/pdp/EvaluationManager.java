@@ -1,13 +1,16 @@
 package com.gstuer.casc.pdp;
 
 import com.gstuer.casc.common.AccessDecision;
+import com.gstuer.casc.common.AccessDecisionVerdict;
 import com.gstuer.casc.common.AccessPolicy;
 import com.gstuer.casc.common.attribute.AttributeSubscriber;
 import com.gstuer.casc.common.pattern.AccessRequestPattern;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -32,17 +35,71 @@ public class EvaluationManager {
      * @return the matching access decisions, or the default access decision if no policy matches the pattern.
      */
     public List<AccessDecision> getDecisions(AccessRequestPattern pattern) {
-        List<AccessDecision> matchingDecisions = this.policyEvaluators.parallelStream()
-                .map(PolicyEvaluator::getDecision)
-                .filter(decision -> pattern.contains(decision.getPattern()) && decision.isValid())
-                .sorted()
-                .toList();
+        List<AccessDecision> matchingDecisions = this.getMatchingDecisions(pattern);
 
         // If no policy matches the access request pattern, the requesting PEP receives the default access decision.
         if (matchingDecisions.isEmpty()) {
             return List.of(constructDefaultDecision(pattern));
         }
         return matchingDecisions;
+    }
+
+    /**
+     * Verifies the access decisions of a session initialization that a PEP received from another PDP, by stating per
+     * access decision whether this PDP holds the same decision. The decisions are verified individually rather than
+     * as a set, as the conflicts between them are resolved by the enforcing PEP for the individual data frame: a
+     * verdict on their resolution would reject a session initialization of an agreeing PDP whenever a flow is
+     * governed by conflicting decisions, since each submitted decision then states its own action and next hops
+     * rather than those of the composite decision.
+     *
+     * @param decisions the access decisions to be verified
+     * @return one verdict per access decision, in the order of the given decisions.
+     */
+    public List<AccessDecisionVerdict> verifyDecisions(Collection<AccessDecision> decisions) {
+        return decisions.stream().map(this::verifyDecision).toList();
+    }
+
+    /**
+     * Verifies a single access decision against the access decisions of this PDP. A decision is confirmed by an own
+     * decision of an equal flow pattern that takes the same action for the same next hops, as the two PDPs then
+     * evaluated the same policy for the same flow. A deviating action or next hop indicates a fault, a compromise,
+     * or an attribute value that changed between the two evaluations. An own decision of a more general flow pattern
+     * does not confirm the decision, as this PDP may hold a more specific decision that denies the flow in question.
+     * The default access decision does not contribute either, as a verification compares the policy sets of two PDPs
+     * rather than the fallback of a PDP that administers no policy for the flow at all.
+     *
+     * @param decision the access decision to be verified
+     * @return the verdict for the given access decision.
+     */
+    private AccessDecisionVerdict verifyDecision(AccessDecision decision) {
+        Optional<AccessDecision> optionalDecision = this.getMatchingDecisions(decision.getPattern()).stream()
+                .filter(ownDecision -> ownDecision.getPattern().equals(decision.getPattern())
+                        && ownDecision.getAction() == decision.getAction()
+                        && ownDecision.getNextHops().equals(decision.getNextHops()))
+                .findFirst();
+
+        // A verdict holds until the earlier of the two access decisions expires, as neither PDP vouches for its
+        // decision beyond its own period of validity. A negative verdict holds until the verified decision expires,
+        // after which the PEP receives a session initialization that is verified anew.
+        Instant validUntil = optionalDecision.map(AccessDecision::getValidUntil)
+                .filter(decision.getValidUntil()::isAfter)
+                .orElse(decision.getValidUntil());
+        return new AccessDecisionVerdict(decision, optionalDecision.isPresent(), validUntil);
+    }
+
+    /**
+     * Gets the access decisions of all policies whose flow pattern matches the given access request pattern and
+     * whose period of validity has not elapsed, in a deterministic order.
+     *
+     * @param pattern the access request pattern to be matched
+     * @return the matching access decisions.
+     */
+    private List<AccessDecision> getMatchingDecisions(AccessRequestPattern pattern) {
+        return this.policyEvaluators.parallelStream()
+                .map(PolicyEvaluator::getDecision)
+                .filter(decision -> pattern.contains(decision.getPattern()) && decision.isValid())
+                .sorted()
+                .toList();
     }
 
     /**

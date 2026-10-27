@@ -123,6 +123,18 @@ public class AccessDecision implements Signable, Comparable<AccessDecision> {
     }
 
     /**
+     * Gets the {@link Authorization authorization} stated by this access decision, i.e. everything it states apart
+     * from its period of validity. Two access decisions of an equal authorization are indistinguishable for an
+     * enforcing PEP, which is why a renewed decision supersedes its predecessor in the decision cache and why the
+     * verdict of a verifying PDP concerns the authorization rather than the individual access decision.
+     *
+     * @return the authorization stated by this access decision.
+     */
+    public Authorization getAuthorization() {
+        return new Authorization(this.pattern, this.action, this.nextHops);
+    }
+
+    /**
      * Gets the point in time until the taken decision is valid.
      *
      * @return the instant until the decision is valid.
@@ -233,6 +245,17 @@ public class AccessDecision implements Signable, Comparable<AccessDecision> {
         }
         // Same pattern, same action -> Fall back on hash values.
         return Integer.compare(this.hashCode(), that.hashCode());
+    }
+
+    /**
+     * Represents everything an {@link AccessDecision access decision} states apart from its period of validity,
+     * i.e. the flow it concerns, the action to be taken for it, and the PEPs permitted to receive its data frames.
+     *
+     * @param pattern  the flow pattern of the access decision
+     * @param action   the action of the access decision
+     * @param nextHops the next hops of the access decision
+     */
+    public record Authorization(AccessRequestPattern pattern, Action action, Set<InetAddress> nextHops) {
     }
 
     /**

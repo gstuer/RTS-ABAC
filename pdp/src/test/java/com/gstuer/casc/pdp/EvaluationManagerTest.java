@@ -1,6 +1,7 @@
 package com.gstuer.casc.pdp;
 
 import com.gstuer.casc.common.AccessDecision;
+import com.gstuer.casc.common.AccessDecisionVerdict;
 import com.gstuer.casc.common.AccessPolicy;
 import com.gstuer.casc.common.AuthenticationClient;
 import com.gstuer.casc.common.attribute.AttributeSubscriber;
@@ -18,6 +19,7 @@ import org.pcap4j.util.MacAddress;
 
 import java.net.InetAddress;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
@@ -34,6 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * resolved by the enforcing PEP for the individual data frame rather than by the PDP.
  */
 public class EvaluationManagerTest {
+    private static final Instant VALID_UNTIL = Instant.now().plusSeconds(60);
+
     private EvaluationManager evaluationManager;
     private AccessRequestPattern ethernetPattern;
     private AccessRequestPattern ipPattern;
@@ -152,6 +156,135 @@ public class EvaluationManagerTest {
         List<AccessDecision> decisions = this.evaluationManager.getDecisions(this.ipPattern);
         assertEquals(1, decisions.size());
         assertEquals(Set.of(this.firstNextHop, this.secondNextHop), decisions.get(0).getNextHops());
+    }
+
+    //
+    // Server-aided verification: the verdict a PDP states per submitted access decision
+    //
+
+    /**
+     * A PDP confirms an access decision if it holds the same decision for the same flow pattern, i.e. if the two
+     * PDPs derived the same action and the same next hops from the policies they administer for that flow.
+     */
+    @Test
+    public void testIdenticalDecisionIsConfirmed() {
+        this.evaluationManager.addPolicy(grantingPolicy(this.ipPattern, this.firstNextHop));
+        AccessDecision decision = grant(this.ipPattern, this.firstNextHop);
+
+        List<AccessDecisionVerdict> verdicts = this.evaluationManager.verifyDecisions(List.of(decision));
+
+        assertEquals(1, verdicts.size(), "One verdict per submitted access decision is returned.");
+        assertEquals(decision, verdicts.get(0).getDecision(), "A verdict carries the decision it concerns.");
+        assertTrue(verdicts.get(0).isVerified());
+    }
+
+    /**
+     * A deviating action is not confirmed, as it indicates a fault, a compromise, or an attribute value that changed
+     * between the two evaluations.
+     */
+    @Test
+    public void testDeviatingActionIsNotConfirmed() {
+        this.evaluationManager.addPolicy(grantingPolicy(this.ipPattern, this.firstNextHop));
+
+        List<AccessDecisionVerdict> verdicts = this.evaluationManager.verifyDecisions(List.of(
+                new AccessDecision(this.ipPattern, AccessDecision.Action.DENY, Set.of(), VALID_UNTIL),
+                new AccessDecision(this.ipPattern, AccessDecision.Action.NOTAPPLICABLE, Set.of(), VALID_UNTIL)));
+
+        assertFalse(verdicts.get(0).isVerified());
+        assertFalse(verdicts.get(1).isVerified());
+    }
+
+    /**
+     * A deviating next hop is not confirmed either, as the two PDPs then permit different recipients for the same
+     * data frame flow.
+     */
+    @Test
+    public void testDeviatingNextHopIsNotConfirmed() {
+        this.evaluationManager.addPolicy(grantingPolicy(this.ipPattern, this.firstNextHop));
+
+        List<AccessDecisionVerdict> verdicts = this.evaluationManager.verifyDecisions(List.of(
+                grant(this.ipPattern, this.secondNextHop)));
+
+        assertFalse(verdicts.get(0).isVerified());
+    }
+
+    /**
+     * An own policy of a more general flow pattern does not confirm a decision, as this PDP may hold a more specific
+     * policy that denies the flow in question. Verifying against an equal flow pattern keeps the verdict sound
+     * without the verifying PDP having to reason about the conflict resolution of the enforcing PEP.
+     */
+    @Test
+    public void testDecisionOfMoreSpecificFlowPatternIsNotConfirmed() {
+        this.evaluationManager.addPolicy(grantingPolicy(this.ethernetPattern, this.firstNextHop));
+
+        List<AccessDecisionVerdict> verdicts = this.evaluationManager.verifyDecisions(List.of(
+                grant(this.ipPattern, this.firstNextHop)));
+
+        assertFalse(verdicts.get(0).isVerified());
+    }
+
+    /**
+     * A flow pattern that no own policy matches is not confirmed. The default access decision does not contribute to
+     * a verification, as a verification compares the policy sets of two PDPs rather than the fallback of a PDP that
+     * administers no policy for the flow at all.
+     */
+    @Test
+    public void testDecisionOfUnmatchedFlowPatternIsNotConfirmed() {
+        List<AccessDecisionVerdict> verdicts = this.evaluationManager.verifyDecisions(List.of(
+                grant(this.ipPattern, this.firstNextHop),
+                new AccessDecision(this.ipPattern, AccessDecision.Action.DENY, Set.of(), VALID_UNTIL)));
+
+        assertFalse(verdicts.get(0).isVerified(), "A PDP without a matching policy confirms no grant.");
+        assertFalse(verdicts.get(1).isVerified(), "Nor does its default decision confirm a denial.");
+    }
+
+    /**
+     * Each conflicting decision of a flow is confirmed individually. A verdict on their resolution would reject the
+     * session initialization of an agreeing PDP whenever a flow is governed by conflicting decisions, as each
+     * submitted decision then states its own next hops rather than those of the composite decision.
+     */
+    @Test
+    public void testConflictingDecisionsAreConfirmedIndividually() {
+        this.evaluationManager.addPolicy(grantingPolicy(this.ipPattern, this.firstNextHop));
+        this.evaluationManager.addPolicy(grantingPolicy(this.ipPattern, this.secondNextHop));
+
+        List<AccessDecisionVerdict> verdicts = this.evaluationManager.verifyDecisions(List.of(
+                grant(this.ipPattern, this.firstNextHop),
+                grant(this.ipPattern, this.secondNextHop)));
+
+        assertTrue(verdicts.get(0).isVerified());
+        assertTrue(verdicts.get(1).isVerified());
+    }
+
+    /**
+     * A verdict holds until the earlier of the two access decisions expires, as neither PDP vouches for its decision
+     * beyond its own period of validity. A negative verdict holds until the verified decision expires, after which
+     * the enforcing PEP requests a session initialization that is verified anew.
+     */
+    @Test
+    public void testVerdictExpiresWithTheEarlierOfTheTwoDecisions() {
+        // The decisions of this policy are valid for 60 seconds, i.e. longer than the submitted decision below.
+        this.evaluationManager.addPolicy(grantingPolicy(this.ipPattern, this.firstNextHop));
+        AccessDecision shortLived = new AccessDecision(this.ipPattern, AccessDecision.Action.GRANT,
+                Set.of(this.firstNextHop), Instant.now().plusSeconds(5));
+        AccessDecision longLived = new AccessDecision(this.ipPattern, AccessDecision.Action.GRANT,
+                Set.of(this.firstNextHop), Instant.now().plusSeconds(600));
+        AccessDecision rejected = new AccessDecision(this.ipPattern, AccessDecision.Action.DENY, Set.of(),
+                Instant.now().plusSeconds(5));
+
+        List<AccessDecisionVerdict> verdicts = this.evaluationManager
+                .verifyDecisions(List.of(shortLived, longLived, rejected));
+
+        assertEquals(shortLived.getValidUntil(), verdicts.get(0).getValidUntil(),
+                "The submitted decision expires first, so that the verdict expires with it.");
+        assertTrue(verdicts.get(1).getValidUntil().isBefore(longLived.getValidUntil()),
+                "The own decision expires first, so that the verdict expires with it.");
+        assertEquals(rejected.getValidUntil(), verdicts.get(2).getValidUntil(),
+                "A negative verdict holds until the verified decision expires.");
+    }
+
+    private static AccessDecision grant(AccessRequestPattern pattern, InetAddress nextHop) {
+        return new AccessDecision(pattern, AccessDecision.Action.GRANT, Set.of(nextHop), VALID_UNTIL);
     }
 
     private static AccessPolicy grantingPolicy(AccessRequestPattern pattern, InetAddress nextHop) {

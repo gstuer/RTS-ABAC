@@ -1,5 +1,6 @@
 package com.gstuer.casc.pdp;
 
+import com.gstuer.casc.common.AccessDecision;
 import com.gstuer.casc.common.cryptography.EncodedKey;
 import com.gstuer.casc.common.cryptography.NoOperationAuthenticator;
 import com.gstuer.casc.common.message.AccessControlMessage;
@@ -16,11 +17,15 @@ import org.pcap4j.packet.namednumber.EtherType;
 import org.pcap4j.util.MacAddress;
 
 import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -51,55 +56,87 @@ public class AuthorizationControllerTest {
         this.egress.clear();
     }
 
+    /**
+     * A verification request yields exactly one message, which is addressed to the requesting PEP and contains one
+     * verdict per submitted access decision. In contrast to an access request, it initializes no session at the next
+     * hop PEP of the decision, so that the verification does not become observable outside the requesting PEP.
+     */
     @Test
     public void testVerificationRequestIsAnsweredToRequesterOnly() throws Exception {
-        // Execution
-        this.controller.handleRequest(new AccessVerificationRequestMessage(this.requester,
-                this.authenticationAuthority, null, policyPattern()).sign(remoteAuthenticator()));
-
-        // Assertions
-        //// A verification request yields exactly one message, which is addressed to the requesting PEP. In contrast
-        //// to an access request, it initializes no session at the next hop PEP of the decision.
-        List<AccessControlMessage<?>> responses = List.copyOf(this.egress);
-        assertEquals(1, responses.size());
-        AccessControlMessage<?> response = responses.get(0);
-        assertInstanceOf(AccessVerificationMessage.class, response);
-        assertEquals(this.requester, response.getDestination());
-        assertTrue(((AccessVerificationMessage) response).getPayload().isGranting());
-        assertEquals(policyPattern(), ((AccessVerificationMessage) response).getPayload().getPattern());
-    }
-
-    @Test
-    public void testAccessRequestStillInitializesSessionAtNextHop() throws Exception {
-        // Execution
-        this.controller.handleRequest(new AccessRequestMessage(this.requester, this.authenticationAuthority,
-                null, policyPattern()).sign(remoteAuthenticator()));
-
-        // Assertions
-        //// An access request yields a session initialization for the next hop PEP and one for the requesting PEP
-        List<AccessControlMessage<?>> responses = List.copyOf(this.egress);
-        assertEquals(2, responses.size());
-        assertTrue(responses.stream().allMatch(message -> message instanceof AccessDecisionMessage));
-        assertEquals(InetAddress.getByName("192.168.0.61"), responses.get(0).getDestination());
-        assertEquals(this.requester, responses.get(1).getDestination());
-    }
-
-    @Test
-    public void testVerificationRequestForUnknownFlowIsDenied() throws Exception {
         // Test data
-        AccessRequestPattern unknownPattern = new EthernetPattern(POLICY_DESTINATION_MAC, POLICY_SOURCE_MAC,
-                EtherType.ARP);
+        AccessDecision decision = policyDecision();
 
         // Execution
         this.controller.handleRequest(new AccessVerificationRequestMessage(this.requester,
-                this.authenticationAuthority, null, unknownPattern).sign(remoteAuthenticator()));
+                this.authenticationAuthority, null, List.of(decision)).sign(remoteAuthenticator()));
 
         // Assertions
         List<AccessControlMessage<?>> responses = List.copyOf(this.egress);
         assertEquals(1, responses.size());
         AccessVerificationMessage response = assertInstanceOf(AccessVerificationMessage.class, responses.get(0));
         assertEquals(this.requester, response.getDestination());
-        assertTrue(response.getPayload().isDenying());
+        assertEquals(1, response.getPayload().size());
+        assertEquals(decision, response.getPayload().get(0).getDecision());
+        assertTrue(response.getPayload().get(0).isVerified());
+    }
+
+    /**
+     * A PDP confirms an access decision only if it holds the same decision for the same flow pattern. A deviating
+     * action, a deviating next hop, and a flow pattern that no own policy matches are therefore rejected, as each of
+     * them indicates a fault, a compromise, or an attribute value that changed between the two evaluations.
+     */
+    @Test
+    public void testDeviatingDecisionsAreNotConfirmed() throws Exception {
+        // Test data
+        AccessRequestPattern unknownPattern = new EthernetPattern(POLICY_DESTINATION_MAC, POLICY_SOURCE_MAC,
+                EtherType.ARP);
+        Instant validUntil = Instant.now().plusSeconds(60);
+        List<AccessDecision> decisions = List.of(
+                policyDecision(),
+                new AccessDecision(policyPattern(), AccessDecision.Action.DENY, Set.of(), validUntil),
+                new AccessDecision(policyPattern(), AccessDecision.Action.GRANT,
+                        InetAddress.getByName("192.168.0.99"), validUntil),
+                new AccessDecision(unknownPattern, AccessDecision.Action.GRANT,
+                        InetAddress.getByName("192.168.0.61"), validUntil));
+
+        // Execution
+        this.controller.handleRequest(new AccessVerificationRequestMessage(this.requester,
+                this.authenticationAuthority, null, decisions).sign(remoteAuthenticator()));
+
+        // Assertions
+        AccessVerificationMessage response = assertInstanceOf(AccessVerificationMessage.class,
+                List.copyOf(this.egress).get(0));
+        assertEquals(4, response.getPayload().size(), "One verdict per submitted access decision is returned.");
+        assertTrue(response.getPayload().get(0).isVerified(), "The decision of the own policy is confirmed.");
+        assertFalse(response.getPayload().get(1).isVerified(), "A deviating action is not confirmed.");
+        assertFalse(response.getPayload().get(2).isVerified(), "A deviating next hop is not confirmed.");
+        assertFalse(response.getPayload().get(3).isVerified(), "An unmatched flow pattern is not confirmed.");
+    }
+
+    /**
+     * A verdict never outlives the access decision it concerns, as the issuing PDP does not vouch for its decision
+     * beyond its own period of validity. The exact period of a verdict is the minimum of the two decisions, which
+     * {@link EvaluationManagerTest} pins down for a policy set whose validity the test controls.
+     */
+    @Test
+    public void testVerdictDoesNotOutliveTheVerifiedDecision() throws Exception {
+        // Test data
+        AccessDecision decision = policyDecision();
+
+        // Execution
+        this.controller.handleRequest(new AccessVerificationRequestMessage(this.requester,
+                this.authenticationAuthority, null, List.of(decision)).sign(remoteAuthenticator()));
+
+        // Assertion
+        AccessVerificationMessage response = assertInstanceOf(AccessVerificationMessage.class,
+                List.copyOf(this.egress).get(0));
+        assertFalse(response.getPayload().get(0).getValidUntil().isAfter(decision.getValidUntil()));
+    }
+
+    private static AccessDecision policyDecision() throws UnknownHostException {
+        // The access decision that the policy set hardcoded in the controller yields for the flow it grants.
+        return new AccessDecision(policyPattern(), AccessDecision.Action.GRANT,
+                InetAddress.getByName("192.168.0.61"), Instant.now().plusSeconds(60));
     }
 
     private static AccessRequestPattern policyPattern() {

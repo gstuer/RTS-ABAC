@@ -1,6 +1,7 @@
 package com.gstuer.casc.common.serialization;
 
 import com.gstuer.casc.common.AccessDecision;
+import com.gstuer.casc.common.AccessDecisionVerdict;
 import com.gstuer.casc.common.attribute.AttributeIdentifier;
 import com.gstuer.casc.common.attribute.LongAttribute;
 import com.gstuer.casc.common.attribute.PolicyAttribute;
@@ -329,7 +330,10 @@ public class JsonProcessorTest {
         DigitalSignature signature = new DigitalSignature(new byte[32], "test");
         AccessRequestPattern pattern = new EthernetPattern(MacAddress.getByName("00:00:00:00:00:00"),
                 MacAddress.getByName("ff:ff:ff:ff:ff:ff"), EtherType.IPV4);
-        AccessVerificationRequestMessage message = new AccessVerificationRequestMessage(source, destination, signature, pattern);
+        AccessDecision decision = new AccessDecision(pattern, AccessDecision.Action.GRANT,
+                InetAddress.getByName("127.0.0.4"), Instant.now().plus(Duration.ofSeconds(60)));
+        AccessVerificationRequestMessage message = new AccessVerificationRequestMessage(source, destination, signature,
+                List.of(decision));
 
         // Execution
         byte[] serialMessage = jsonProcessor.serialize(message);
@@ -353,7 +357,12 @@ public class JsonProcessorTest {
                 MacAddress.getByName("ff:ff:ff:ff:ff:ff"), EtherType.IPV4);
         AccessDecision decision = new AccessDecision(pattern, AccessDecision.Action.GRANT, nextHop,
                 Instant.now().plus(Duration.ofSeconds(60)));
-        AccessVerificationMessage message = new AccessVerificationMessage(source, destination, signature, decision);
+        AccessDecisionVerdict confirmation = new AccessDecisionVerdict(decision, true, Instant.now().plusSeconds(30));
+        AccessDecisionVerdict rejection = new AccessDecisionVerdict(new AccessDecision(pattern,
+                AccessDecision.Action.DENY, Set.of(), Instant.now().plusSeconds(60)), false,
+                Instant.now().plusSeconds(45));
+        AccessVerificationMessage message = new AccessVerificationMessage(source, destination, signature,
+                List.of(confirmation, rejection));
 
         // Execution
         byte[] serialMessage = jsonProcessor.serialize(message);
@@ -363,5 +372,12 @@ public class JsonProcessorTest {
         assertNotNull(deserialMessage);
         assertInstanceOf(AccessVerificationMessage.class, deserialMessage);
         assertEquals(message, deserialMessage);
+        //// The verdict of each submitted decision has to survive the wire format, as a PEP assigns the verdicts to
+        //// the decisions of its session initialization and retains them until they expire.
+        AccessVerificationMessage deserialized = (AccessVerificationMessage) deserialMessage;
+        assertTrue(deserialized.getPayload().get(0).isVerified());
+        assertFalse(deserialized.getPayload().get(1).isVerified());
+        assertEquals(decision, deserialized.getPayload().get(0).getDecision());
+        assertArrayEquals(message.getSigningData(), deserialized.getSigningData());
     }
 }

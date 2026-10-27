@@ -1,6 +1,7 @@
 package com.gstuer.casc.pdp;
 
 import com.gstuer.casc.common.AccessDecision;
+import com.gstuer.casc.common.AccessDecisionVerdict;
 import com.gstuer.casc.common.AccessPolicy;
 import com.gstuer.casc.common.AuthenticationClient;
 import com.gstuer.casc.common.attribute.AttributeSubscriber;
@@ -211,25 +212,26 @@ public class AuthorizationController {
             }
         } else if (accessControlMessage instanceof AccessVerificationRequestMessage message) {
             // Verify signature
-            if (!this.authenticationClient.verifyMessage(message)) {
+            if (!this.authenticationClient.verifyMessage(message) || !message.hasPayload()) {
                 return;
             }
 
-            // Get matching decision for the flow pattern whose session initialization is verified
-            // TODO Respond with all matching decisions once the verification protocol is revised.
-            AccessRequestPattern pattern = message.getPayload();
-            AccessDecision decision = this.evaluationManager.getDecisions(pattern).get(0);
+            // State per submitted access decision whether this PDP holds the same decision
+            List<AccessDecisionVerdict> verdicts = this.evaluationManager.verifyDecisions(message.getPayload());
 
-            // Send decision to the requester only, i.e. without initializing sessions at the next hop PEPs
-            AccessVerificationMessage verificationMessage = new AccessVerificationMessage(message.getSource(), null, decision);
+            // Send the verdicts to the requester only, i.e. without initializing sessions at the next hop PEPs
+            AccessVerificationMessage verificationMessage = new AccessVerificationMessage(message.getSource(), null,
+                    verdicts);
             Optional<AccessControlMessage<?>> optionalSignedMessage = authenticationClient.signMessage(verificationMessage);
             if (optionalSignedMessage.isEmpty()) {
                 System.out.println("[PDP] Signing failed.");
                 return;
             }
             this.egressQueue.offer(optionalSignedMessage.get());
-            System.out.printf("[PDP] Verify %s: %s. (took %d µs)\n", decision.isGranting() ? "grant" : "deny",
-                    message.getSource(), TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - arrivalTime));
+            long confirmedDecisions = verdicts.stream().filter(AccessDecisionVerdict::isVerified).count();
+            System.out.printf("[PDP] Verify: %d of %d decisions confirmed for %s. (took %d µs)\n",
+                    confirmedDecisions, verdicts.size(), message.getSource(),
+                    TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - arrivalTime));
         } else {
             System.out.println("[PDP] Unknown message type.");
         }

@@ -1,5 +1,6 @@
 package com.gstuer.casc.common.concurrency;
 
+import com.gstuer.casc.common.AccessDecision;
 import com.gstuer.casc.common.cryptography.NoOperationAuthenticator;
 import com.gstuer.casc.common.message.AccessControlMessage;
 import com.gstuer.casc.common.message.AccessVerificationRequestMessage;
@@ -11,6 +12,9 @@ import org.pcap4j.util.MacAddress;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.time.Instant;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
@@ -24,11 +28,17 @@ public class RequestableAccessVerificationTest {
                 MacAddress.getByName("ff:ff:ff:ff:ff:ff"), EtherType.IPV4);
     }
 
+    private static List<AccessDecision> createDecisions() {
+        return List.of(new AccessDecision(createPattern(), AccessDecision.Action.DENY, Set.of(),
+                Instant.now().plusSeconds(60)));
+    }
+
     private static RequestableAccessVerification createVerification(BlockingQueue<AccessControlMessage<?>> egress,
-                                                                    InetAddress provider, AccessRequestPattern pattern) {
+                                                                    InetAddress provider,
+                                                                    List<AccessDecision> decisions) {
         NoOperationAuthenticator authenticator = new NoOperationAuthenticator();
         authenticator.initializeKeyPair();
-        return new RequestableAccessVerification(egress, authenticator, provider, pattern);
+        return new RequestableAccessVerification(egress, authenticator, provider, decisions);
     }
 
     @Test
@@ -36,8 +46,8 @@ public class RequestableAccessVerificationTest {
         // Test data
         BlockingQueue<AccessControlMessage<?>> egress = new LinkedBlockingQueue<>();
         InetAddress provider = InetAddress.getByName("127.0.0.3");
-        AccessRequestPattern pattern = createPattern();
-        RequestableAccessVerification verification = createVerification(egress, provider, pattern);
+        List<AccessDecision> decisions = createDecisions();
+        RequestableAccessVerification verification = createVerification(egress, provider, decisions);
 
         // Execution
         AccessControlMessage<?> message = verification.constructRequestMessage();
@@ -45,7 +55,7 @@ public class RequestableAccessVerificationTest {
         // Assertions
         assertInstanceOf(AccessVerificationRequestMessage.class, message);
         assertEquals(provider, message.getDestination());
-        assertEquals(pattern, message.getPayload());
+        assertEquals(decisions, message.getPayload());
         assertTrue(message.hasSignature());
     }
 
@@ -54,8 +64,7 @@ public class RequestableAccessVerificationTest {
         // Test data
         BlockingQueue<AccessControlMessage<?>> egress = new LinkedBlockingQueue<>();
         InetAddress provider = InetAddress.getByName("127.0.0.3");
-        AccessRequestPattern pattern = createPattern();
-        RequestableAccessVerification verification = createVerification(egress, provider, pattern);
+        RequestableAccessVerification verification = createVerification(egress, provider, createDecisions());
 
         // Execution
         verification.sendRequestMessage();
@@ -67,16 +76,20 @@ public class RequestableAccessVerificationTest {
         assertTrue(verification.isUnavailable());
     }
 
+    /**
+     * The access decisions to be verified are retained by the resource, as a PEP assigns the verdicts of the
+     * response to the decisions it submitted.
+     */
     @Test
-    public void testPatternIsRetained() throws UnknownHostException {
+    public void testDecisionsAreRetained() throws UnknownHostException {
         // Test data
-        AccessRequestPattern pattern = createPattern();
+        List<AccessDecision> decisions = createDecisions();
 
         // Execution
         RequestableAccessVerification verification = createVerification(new LinkedBlockingQueue<>(),
-                InetAddress.getByName("127.0.0.3"), pattern);
+                InetAddress.getByName("127.0.0.3"), decisions);
 
         // Assertion
-        assertEquals(pattern, verification.getPattern());
+        assertEquals(decisions, verification.getDecisions());
     }
 }

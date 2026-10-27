@@ -27,10 +27,12 @@ import java.util.stream.Collectors;
  *     composite decision, which grants the frame only if all of them grant it, permits the union of their next hops,
  *     and expires as soon as the first of them expires.</li>
  * </ol>
- * The composite decision is derived per data frame and is neither cached nor transmitted, which is why the resolution
- * yields the action, the next hops, and the period of validity of the composite decision rather than a complete
- * {@link AccessDecision}: the union of the conflicting flow patterns is required to represent a composite decision as
- * a decision in its own right, whereas the enforcement of a frame consumes its action and its next hops only.
+ * The resolution yields the action, the next hops, and the period of validity of the composite decision rather than a
+ * complete {@link AccessDecision}: the union of the conflicting flow patterns is required to represent a composite
+ * decision as a decision in its own right, whereas the enforcement of a data frame consumes its action and its next
+ * hops only, and the composite decision is never transmitted. A {@link DecisionCache decision cache} memoises the
+ * resolution of a flow for the period of validity it inherits, so that the composite decision of a flow is derived
+ * once rather than once per data frame.
  */
 public final class DecisionResolver {
     private DecisionResolver() {
