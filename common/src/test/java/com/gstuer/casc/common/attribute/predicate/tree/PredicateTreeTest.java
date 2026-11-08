@@ -89,6 +89,34 @@ public class PredicateTreeTest {
                 "The result holds while its positive operand does.");
     }
 
+    /**
+     * A conjunction that fails because of one operand alone fails as long as that operand does, as its result is
+     * independent of the other one.
+     */
+    @Test
+    public void testNegativeConjunctionFailsAsLongAsItsNegativeOperand() throws Exception {
+        PolicyPredicate.Evaluation evaluation = new AndTree(this.longLivedFalsehood, this.shortLivedTruth)
+                .evaluate(Map.of());
+
+        assertFalse(evaluation.isPositive());
+        assertTrue(evaluation.getEndOfValidity().isAfter(this.shortExpiry.plusSeconds(1)),
+                "The result fails while its negative operand does.");
+    }
+
+    /**
+     * A conjunction of two negative operands fails while either of them fails, as it turns positive only once both of
+     * them change. Its result therefore expires with the last of them.
+     */
+    @Test
+    public void testNegativeConjunctionExpiresWithTheLastOperand() throws Exception {
+        PolicyPredicate.Evaluation evaluation = new AndTree(this.longLivedFalsehood, this.shortLivedFalsehood)
+                .evaluate(Map.of());
+
+        assertFalse(evaluation.isPositive());
+        assertTrue(evaluation.getEndOfValidity().isAfter(this.shortExpiry.plusSeconds(1)),
+                "The result fails while the longer-lived of its operands does.");
+    }
+
     private void assertExpiresWithTheFirstOperand(PolicyPredicate.Evaluation evaluation) {
         assertTrue(evaluation.getEndOfValidity().isBefore(this.shortExpiry.plusSeconds(1)),
                 "The result must not outlive the operand that expires first.");
